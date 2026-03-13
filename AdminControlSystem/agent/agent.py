@@ -18,7 +18,7 @@ import sys
 import time
 from datetime import datetime
 from urllib import request, error, parse
-
+# dummy comment
 # ── Configuration ───────────────────────────────────────────────────────────
 
 POLL_INTERVAL = 5  # seconds
