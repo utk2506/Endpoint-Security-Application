@@ -1,0 +1,678 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Control System — Portal</title>
+    <meta name="description" content="Centralized IT admin access management portal for granting and revoking temporary administrator privileges.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* ── Reset & Variables ──────────────────────────────────────────── */
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+        :root {
+            --bg-primary: #0b0e17;
+            --bg-secondary: #111827;
+            --bg-card: rgba(17, 24, 39, 0.65);
+            --bg-card-hover: rgba(30, 41, 59, 0.7);
+            --border: rgba(99, 102, 241, 0.15);
+            --border-glow: rgba(99, 102, 241, 0.4);
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent: #6366f1;
+            --accent-light: #818cf8;
+            --accent-glow: rgba(99, 102, 241, 0.25);
+            --success: #10b981;
+            --success-bg: rgba(16, 185, 129, 0.12);
+            --danger: #ef4444;
+            --danger-bg: rgba(239, 68, 68, 0.12);
+            --warning: #f59e0b;
+            --warning-bg: rgba(245, 158, 11, 0.12);
+            --radius: 14px;
+            --radius-sm: 8px;
+            --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+            --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* ── Animated Background ───────────────────────────────────────── */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(ellipse 600px 400px at 20% 10%, rgba(99,102,241,0.08) 0%, transparent 70%),
+                radial-gradient(ellipse 500px 500px at 80% 80%, rgba(16,185,129,0.06) 0%, transparent 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* ── Layout ────────────────────────────────────────────────────── */
+        .app-wrapper {
+            position: relative;
+            z-index: 1;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 32px 24px 60px;
+        }
+
+        /* ── Header ────────────────────────────────────────────────────── */
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header-logo {
+            display: inline-flex;
+            align-items: center;
+            gap: 14px;
+            margin-bottom: 8px;
+        }
+
+        .header-icon {
+            width: 48px;
+            height: 48px;
+            background: linear-gradient(135deg, var(--accent), #a78bfa);
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: 0 0 24px var(--accent-glow);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 4px;
+        }
+
+        /* ── Glass Card ────────────────────────────────────────────────── */
+        .card {
+            background: var(--bg-card);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 28px;
+            box-shadow: var(--shadow);
+            transition: border-color var(--transition);
+        }
+
+        .card:hover {
+            border-color: var(--border-glow);
+        }
+
+        .card-title {
+            font-size: 16px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-title .icon {
+            font-size: 18px;
+        }
+
+        /* ── Grid ──────────────────────────────────────────────────────── */
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin-bottom: 24px;
+        }
+
+        .full-width {
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .grid-2 { grid-template-columns: 1fr; }
+        }
+
+        /* ── Form Controls ─────────────────────────────────────────────── */
+        label {
+            display: block;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-secondary);
+            margin-bottom: 6px;
+        }
+
+        select, input[type="text"] {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            outline: none;
+            transition: border-color var(--transition), box-shadow var(--transition);
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px var(--accent-glow);
+        }
+
+        select option {
+            background: var(--bg-secondary);
+        }
+
+        .form-row {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .form-row > * { flex: 1; }
+
+        /* ── Buttons ───────────────────────────────────────────────────── */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 11px 22px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-family: inherit;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all var(--transition);
+            white-space: nowrap;
+        }
+
+        .btn:active { transform: scale(0.97); }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent), #7c3aed);
+            color: #fff;
+            box-shadow: 0 4px 14px var(--accent-glow);
+        }
+
+        .btn-primary:hover {
+            box-shadow: 0 6px 20px rgba(99,102,241,0.4);
+            transform: translateY(-1px);
+        }
+
+        .btn-success {
+            background: linear-gradient(135deg, var(--success), #059669);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(16,185,129,0.2);
+        }
+
+        .btn-success:hover {
+            box-shadow: 0 6px 20px rgba(16,185,129,0.35);
+            transform: translateY(-1px);
+        }
+
+        .btn-danger {
+            background: linear-gradient(135deg, var(--danger), #dc2626);
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(239,68,68,0.2);
+        }
+
+        .btn-danger:hover {
+            box-shadow: 0 6px 20px rgba(239,68,68,0.35);
+            transform: translateY(-1px);
+        }
+
+        .btn-outline {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+        }
+
+        .btn-outline:hover {
+            border-color: var(--accent);
+            color: var(--accent-light);
+            background: var(--accent-glow);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        /* ── Status Badge ──────────────────────────────────────────────── */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+
+        .badge-admin {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border: 1px solid rgba(239,68,68,0.2);
+        }
+
+        .badge-standard {
+            background: var(--success-bg);
+            color: var(--success);
+            border: 1px solid rgba(16,185,129,0.2);
+        }
+
+        .badge-pending {
+            background: var(--warning-bg);
+            color: var(--warning);
+            border: 1px solid rgba(245,158,11,0.2);
+        }
+
+        .badge-completed {
+            background: var(--success-bg);
+            color: var(--success);
+            border: 1px solid rgba(16,185,129,0.2);
+        }
+
+        .badge-failed {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border: 1px solid rgba(239,68,68,0.2);
+        }
+
+        .badge-executing {
+            background: rgba(99,102,241,0.12);
+            color: var(--accent-light);
+            border: 1px solid rgba(99,102,241,0.2);
+        }
+
+        .badge-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: currentColor;
+        }
+
+        .badge-executing .badge-dot {
+            animation: pulse-dot 1.4s infinite;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+
+        /* ── Table ─────────────────────────────────────────────────────── */
+        .table-wrap {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead th {
+            text-align: left;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tbody td {
+            padding: 12px 14px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            border-bottom: 1px solid rgba(99,102,241,0.05);
+        }
+
+        tbody tr {
+            transition: background var(--transition);
+        }
+
+        tbody tr:hover {
+            background: rgba(99,102,241,0.04);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        .empty-state .icon {
+            font-size: 32px;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        /* ── Result Box ────────────────────────────────────────────────── */
+        .result-box {
+            margin-top: 16px;
+            padding: 16px 20px;
+            border-radius: var(--radius-sm);
+            font-size: 14px;
+            font-weight: 500;
+            display: none;
+            align-items: center;
+            gap: 10px;
+            animation: fadeSlideIn 0.3s ease;
+        }
+
+        .result-box.show { display: flex; }
+
+        .result-box.info {
+            background: rgba(99,102,241,0.1);
+            border: 1px solid rgba(99,102,241,0.2);
+            color: var(--accent-light);
+        }
+
+        .result-box.success {
+            background: var(--success-bg);
+            border: 1px solid rgba(16,185,129,0.2);
+            color: var(--success);
+        }
+
+        .result-box.error {
+            background: var(--danger-bg);
+            border: 1px solid rgba(239,68,68,0.2);
+            color: var(--danger);
+        }
+
+        /* ── Toast ─────────────────────────────────────────────────────── */
+        .toast-container {
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .toast {
+            padding: 14px 22px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 500;
+            backdrop-filter: blur(16px);
+            animation: toastIn 0.35s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+        }
+
+        .toast.success {
+            background: rgba(16,185,129,0.15);
+            border: 1px solid rgba(16,185,129,0.25);
+            color: var(--success);
+        }
+
+        .toast.error {
+            background: rgba(239,68,68,0.15);
+            border: 1px solid rgba(239,68,68,0.25);
+            color: var(--danger);
+        }
+
+        .toast.info {
+            background: rgba(99,102,241,0.15);
+            border: 1px solid rgba(99,102,241,0.25);
+            color: var(--accent-light);
+        }
+
+        .toast-exit {
+            animation: toastOut 0.3s ease forwards;
+        }
+
+        @keyframes toastIn {
+            from { opacity: 0; transform: translateX(40px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+
+        @keyframes toastOut {
+            from { opacity: 1; transform: translateX(0); }
+            to { opacity: 0; transform: translateX(40px); }
+        }
+
+        @keyframes fadeSlideIn {
+            from { opacity: 0; transform: translateY(-6px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* ── Connection Indicator ──────────────────────────────────────── */
+        .connection-bar {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 8px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-bottom: 24px;
+        }
+
+        .connection-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 8px rgba(16,185,129,0.5);
+        }
+
+        .connection-dot.offline {
+            background: var(--danger);
+            box-shadow: 0 0 8px rgba(239,68,68,0.5);
+        }
+
+        /* ── Stats Bar ─────────────────────────────────────────────────── */
+        .stats-bar {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            text-align: center;
+            transition: border-color var(--transition);
+        }
+
+        .stat-card:hover {
+            border-color: var(--border-glow);
+        }
+
+        .stat-value {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-light), #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            margin-top: 4px;
+        }
+
+        @media (max-width: 768px) {
+            .stats-bar { grid-template-columns: 1fr; }
+        }
+
+        /* ── Scrollbar ─────────────────────────────────────────────────── */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+    </style>
+</head>
+<body>
+    <div class="toast-container" id="toastContainer"></div>
+
+    <div class="app-wrapper">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-logo">
+                <div class="header-icon">🛡️</div>
+                <h1>Admin Control System</h1>
+            </div>
+            <p>Centralized Temporary Administrator Access Management</p>
+        </header>
+
+        <!-- Connection Status -->
+        <div class="connection-bar">
+            <span class="connection-dot" id="connectionDot"></span>
+            <span id="connectionText">Connecting to server…</span>
+        </div>
+
+        <!-- Stats Bar -->
+        <div class="stats-bar">
+            <div class="stat-card">
+                <div class="stat-value" id="statDevices">0</div>
+                <div class="stat-label">Devices</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statAdmins">0</div>
+                <div class="stat-label">Active Admins</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="statCommands">0</div>
+                <div class="stat-label">Commands Executed</div>
+            </div>
+        </div>
+
+        <!-- Command Panel + Admin List -->
+        <div class="grid-2">
+            <!-- Command Panel -->
+            <div class="card" id="commandPanel">
+                <div class="card-title"><span class="icon">⚡</span> Command Panel</div>
+
+                <div style="margin-bottom: 14px;">
+                    <label for="deviceSelect">Target Device</label>
+                    <select id="deviceSelect">
+                        <option value="">— Select a device —</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 16px;">
+                    <label for="usernameInput">Username</label>
+                    <input type="text" id="usernameInput" placeholder="e.g. rahul">
+                </div>
+
+                <div class="btn-group">
+                    <button class="btn btn-primary" id="btnCheck" onclick="checkStatus()">
+                        🔍 Check Status
+                    </button>
+                    <button class="btn btn-success" id="btnGrant" onclick="grantAdmin()">
+                        ✅ Grant Admin
+                    </button>
+                    <button class="btn btn-danger" id="btnRevoke" onclick="revokeAdmin()">
+                        🚫 Revoke Admin
+                    </button>
+                </div>
+
+                <div class="result-box" id="resultBox">
+                    <span id="resultIcon"></span>
+                    <span id="resultText"></span>
+                </div>
+            </div>
+
+            <!-- Current Admins -->
+            <div class="card">
+                <div class="card-title">
+                    <span class="icon">👥</span> Admin Users on Device
+                    <button class="btn btn-outline" style="margin-left:auto; padding:6px 14px; font-size:12px;" onclick="refreshAdminList()">↻ Refresh</button>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>User</th>
+                                <th>Status</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="adminTableBody">
+                            <tr>
+                                <td colspan="3">
+                                    <div class="empty-state">
+                                        <span class="icon">📋</span>
+                                        Select a device and click Check Status
+                                    </div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Command History -->
+        <div class="card full-width">
+            <div class="card-title"><span class="icon">📜</span> Command History</div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Device</th>
+                            <th>Action</th>
+                            <th>User</th>
+                            <th>Status</th>
+                            <th>Result</th>
+                            <th>Time</th>
+                        </tr>
+                    </thead>
+                    <tbody id="historyTableBody">
+                        <tr>
+                            <td colspan="7">
+                                <div class="empty-state">
+                                    <span class="icon">📭</span>
+                                    No commands yet
+                                </div>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script src="/portal/dashboard.js"></script>
+</body>
+</html>
