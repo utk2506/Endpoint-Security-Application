@@ -76,10 +76,15 @@ async function loadDevices() {
         const currentVal = select.value;
         select.innerHTML = '<option value="">— Select a device —</option>';
 
+        const now = new Date();
         devices.forEach(d => {
+            const lastSeen = new Date(d.last_seen);
+            const isOnline = (now - lastSeen) < 15000; // 15 seconds threshold
+            const statusIcon = isOnline ? '🟢' : '🔴';
+
             const opt = document.createElement('option');
             opt.value = d.id;
-            opt.textContent = `${d.hostname}  (${d.ip_address})`;
+            opt.textContent = `${statusIcon} ${d.hostname}  (${d.ip_address})`;
             select.appendChild(opt);
         });
 
@@ -95,7 +100,7 @@ async function loadDevices() {
 // ── Device selection ───────────────────────────────────────────────────────
 
 $('deviceSelect')?.addEventListener('change', function () {
-    selectedDeviceId = this.value ? parseInt(this.value) : null;
+    selectedDeviceId = this.value ? this.value : null;
     hideResult();
     if (selectedDeviceId) {
         refreshAdminList();

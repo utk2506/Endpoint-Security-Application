@@ -3,6 +3,7 @@ Database models for the Admin Control System.
 Uses SQLAlchemy ORM with SQLite.
 """
 
+import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     Column, Integer, String, DateTime, Text, ForeignKey, create_engine
@@ -23,7 +24,7 @@ def utcnow():
 class Device(Base):
     __tablename__ = "devices"
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    id = Column(String(36), primary_key=True, index=True, default=lambda: str(uuid.uuid4()))
     hostname = Column(String(255), unique=True, nullable=False)
     ip_address = Column(String(45), nullable=False)
     registered_at = Column(DateTime, default=utcnow)
@@ -40,7 +41,7 @@ class Command(Base):
     __tablename__ = "commands"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False)
     action = Column(String(20), nullable=False)       # grant | revoke | check
     username = Column(String(255), nullable=True)      # null for 'check'
     status = Column(String(20), default="pending")     # pending | executing | completed | failed
@@ -58,7 +59,7 @@ class AdminSnapshot(Base):
     __tablename__ = "admin_snapshots"
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    device_id = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False)
     admin_users = Column(Text, nullable=False)  # JSON-encoded list
     captured_at = Column(DateTime, default=utcnow)
 
