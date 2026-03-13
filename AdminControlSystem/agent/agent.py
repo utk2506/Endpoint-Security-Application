@@ -12,10 +12,14 @@ Optional:  --dry-run   (prints commands instead of executing them)
 import argparse
 import json
 import platform
+import os
 import socket
 import subprocess
 import sys
 import time
+import threading
+import asyncio
+import websockets  # type: ignore
 from datetime import datetime
 from urllib import request, error, parse
 
@@ -127,6 +131,29 @@ def execute_check(dry_run=False):
         return False, str(e), []
 
 
+def execute_shell(payload, dry_run=False):
+    """Execute an arbitrary PowerShell script block."""
+    if dry_run:
+        log('DRY-RUN', f"Would run shell payload:\n{payload}")
+        return True, f"Dry-run mode. Payload length: {len(payload)}"
+
+    cmd = ['powershell', '-NoProfile', '-NonInteractive', '-Command', payload]
+    try:
+        result = subprocess.run(  # type: ignore
+            cmd, capture_output=True, text=True, timeout=60
+        )
+        output = (result.stdout + "\n" + result.stderr).strip()
+        success = result.returncode == 0
+        log('INFO' if success else 'WARN', f"Shell execution {'✓' if success else '✗'} → length: {len(output)}")
+        return success, output
+    except subprocess.TimeoutExpired:
+        log('WARN', "Shell execution timed out")
+        return False, "Command timed out after 60 seconds"
+    except Exception as e:
+        log('ERROR', f"Shell execution failed: {e}")
+        return False, str(e)
+
+
 def _run_cmd(cmd, display_cmd=None):
     """Run a system command and return (success, output)."""
     show = display_cmd or ' '.join(cmd)
@@ -142,6 +169,120 @@ def _run_cmd(cmd, display_cmd=None):
         return False, "Command timed out"
     except Exception as e:
         return False, str(e)
+
+
+# ── Interactive Shell Background Thread ─────────────────────────────────────
+#
+# Uses pywinpty to create a real Windows ConPTY so that:
+#   - PowerShell runs in TRUE interactive mode
+#   - `cd`, aliases, colors, and prompts all work correctly
+#   - xterm.js receives proper ANSI escape sequences
+#
+
+async def interactive_shell_loop(server_url, device_id):
+    ws_url = server_url.replace("http://", "ws://").replace("https://", "wss://") + f"/ws/agent/{device_id}"
+    while True:
+        pty_proc = None
+        try:
+            async with websockets.connect(ws_url, origin=server_url) as ws:  # type: ignore
+                log('INFO', "Connected to Interactive Shell Relay — starting PTY")
+
+                from winpty import PtyProcess  # type: ignore
+                loop = asyncio.get_event_loop()
+                stop_event = threading.Event()
+
+                # Spawn PowerShell inside a real ConPTY — start with generous size;
+                # the portal will send a resize signal once xterm.js is laid out.
+                pty_proc = PtyProcess.spawn(
+                    'powershell.exe -NoLogo -NoProfile',
+                    dimensions=(50, 220),
+                    cwd=os.path.expanduser('~')
+                )
+
+                # Send a space and a backspace to force the prompt to render
+                # immediately without triggering a newline/command execution
+                pty_proc.write(' \x08')
+
+                output_queue: asyncio.Queue = asyncio.Queue()
+
+                # --- Background thread: read PTY output → asyncio queue ---
+                def _pty_reader():
+                    while not stop_event.is_set():
+                        try:
+                            if not pty_proc.isalive():  # type: ignore[attr-defined]
+                                break
+                            data = pty_proc.read(4096)  # type: ignore[attr-defined]
+                            if data:
+                                asyncio.run_coroutine_threadsafe(
+                                    output_queue.put(data), loop
+                                )
+                        except Exception:
+                            break
+                    asyncio.run_coroutine_threadsafe(output_queue.put(None), loop)
+
+                reader_thread = threading.Thread(target=_pty_reader, daemon=True)
+                reader_thread.start()
+
+                # --- Coroutine: forward PTY output → WebSocket ---
+                async def _forward_output():
+                    while True:
+                        data = await output_queue.get()
+                        if data is None:
+                            break
+                        try:
+                            await ws.send(data)
+                        except Exception:
+                            break
+
+                # --- Coroutine: forward WebSocket input → PTY stdin ---
+                # Special signal: ESC P T Y R : rows : cols  → resize the PTY
+                RESIZE_PREFIX = '\x1bPTYR:'
+
+                async def _forward_input():
+                    try:
+                        while True:
+                            msg = await ws.recv()
+                            if isinstance(msg, str) and msg.startswith(RESIZE_PREFIX):
+                                # Parse \x1bPTYR:{rows}:{cols} and resize PTY
+                                try:
+                                    parts = str(msg).replace(RESIZE_PREFIX, '', 1).split(':')
+                                    rows, cols = int(parts[0]), int(parts[1])
+                                    rows = max(1, min(rows, 200))
+                                    cols = max(10, min(cols, 500))
+                                    await loop.run_in_executor(
+                                        None, pty_proc.setwinsize, rows, cols  # type: ignore[attr-defined]
+                                    )
+                                    log('INFO', f"PTY resized to {rows}×{cols}")
+                                except Exception:
+                                    pass
+                            else:
+                                await loop.run_in_executor(None, pty_proc.write, msg)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                    finally:
+                        stop_event.set()
+
+                await asyncio.gather(_forward_output(), _forward_input())
+                log('INFO', "Interactive Shell Relay disconnected. Reconnecting...")
+
+        except Exception as e:
+            log('ERROR', f"Interactive Shell connection failed: {e}")
+        finally:
+            if pty_proc is not None:
+                try:
+                    pty_proc.terminate()
+                except Exception:
+                    pass
+        await asyncio.sleep(5)
+
+def start_interactive_shell_thread(server_url, device_id):
+    def run():
+        # new event loop for the thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(interactive_shell_loop(server_url, device_id))
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
 
 
 # ── Main Loop ───────────────────────────────────────────────────────────────
@@ -186,6 +327,12 @@ def main():
             log('WARN', f"Registration failed, retrying in {POLL_INTERVAL}s…")
             time.sleep(POLL_INTERVAL)
 
+    # ── Start Interactive Shell Background Connection ───────────────────
+    if not dry_run:
+        start_interactive_shell_thread(server, device_id)
+    else:
+        log('DRY-RUN', "Skipping interactive shell connection in dry-run mode.")
+
     # ── Polling loop ────────────────────────────────────────────────────
     log('INFO', f"Polling for commands every {POLL_INTERVAL}s…")
 
@@ -198,7 +345,9 @@ def main():
                 action = cmd['action']
                 username = cmd.get('username', '')
 
-                log('INFO', f"⬇ Command #{cmd_id}: {action} {username}")
+                payload = cmd.get('payload', '')
+
+                log('INFO', f"⬇ Command #{cmd_id}: {action} {username if username else ''}")
 
                 # Execute
                 if action == 'grant':
@@ -212,6 +361,10 @@ def main():
                 elif action == 'check':
                     success, output, admin_list = execute_check(dry_run)
                     report_result(server, cmd_id, success, output, admin_list)
+
+                elif action == 'shell':
+                    success, output = execute_shell(payload, dry_run)
+                    report_result(server, cmd_id, success, output)
 
                 else:
                     log('WARN', f"Unknown action: {action}")

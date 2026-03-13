@@ -6,28 +6,78 @@ FastAPI application serving REST API + static portal files.
 import json
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-from sqlalchemy.orm import Session
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from fastapi.staticfiles import StaticFiles  # type: ignore
+from fastapi.responses import FileResponse  # type: ignore
+from pydantic import BaseModel  # type: ignore
+from sqlalchemy.orm import Session  # type: ignore
 
-from models import SessionLocal, Device, Command, AdminSnapshot
+from models import SessionLocal, Device, Command, AdminSnapshot  # type: ignore
+
+# ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
+
+class ConnectionManager:
+    def __init__(self):
+        # Maps device_id -> {"agent": WebSocket, "portal": WebSocket}
+        self.active_connections: Dict[str, Dict[str, Optional[WebSocket]]] = {}
+
+    async def connect(self, device_id: str, client_type: str, websocket: WebSocket):
+        await websocket.accept()
+        if device_id not in self.active_connections:
+            self.active_connections[device_id] = {"agent": None, "portal": None}
+        self.active_connections[device_id][client_type] = websocket
+
+    def disconnect(self, device_id: str, client_type: str):
+        if device_id in self.active_connections:
+            self.active_connections[device_id][client_type] = None
+            if not self.active_connections[device_id]["agent"] and not self.active_connections[device_id]["portal"]:
+                del self.active_connections[device_id]  # type: ignore[misc]
+
+    async def forward(self, device_id: str, source_type: str, message: str):
+        target_type = "portal" if source_type == "agent" else "agent"
+        if device_id in self.active_connections:
+            target_ws = self.active_connections[device_id].get(target_type)
+            if target_ws:
+                try:
+                    await target_ws.send_text(message)
+                except Exception:
+                    pass
+
+manager = ConnectionManager()
+
 
 # ── App ──────────────────────────────────────────────────────────────────────
 
 app = FastAPI(title="Admin Control System", version="1.0.0")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS middleware removed to avoid WebSocket 403s
+
+
+# ── WebSocket Endpoints ──────────────────────────────────────────────────────
+
+@app.websocket("/ws/portal/{device_id}")
+async def websocket_portal(websocket: WebSocket, device_id: str):
+    await manager.connect(device_id, "portal", websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.forward(device_id, "portal", data)
+    except WebSocketDisconnect:
+        manager.disconnect(device_id, "portal")
+
+
+@app.websocket("/ws/agent/{device_id}")
+async def websocket_agent(websocket: WebSocket, device_id: str):
+    await manager.connect(device_id, "agent", websocket)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            await manager.forward(device_id, "agent", data)
+    except WebSocketDisconnect:
+        manager.disconnect(device_id, "agent")
 
 
 def get_db():
@@ -47,8 +97,9 @@ class RegisterRequest(BaseModel):
 
 class SendCommandRequest(BaseModel):
     device_id: str
-    action: str          # grant | revoke | check
+    action: str          # grant | revoke | check | shell
     username: Optional[str] = None
+    payload: Optional[str] = None
 
 
 class CommandResultRequest(BaseModel):
@@ -103,16 +154,20 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    if req.action not in ("grant", "revoke", "check"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, or check")
+    if req.action not in ("grant", "revoke", "check", "shell"):
+        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, or shell")
 
     if req.action in ("grant", "revoke") and not req.username:
         raise HTTPException(status_code=400, detail="Username required for grant/revoke")
+
+    if req.action == "shell" and not req.payload:
+        raise HTTPException(status_code=400, detail="Payload required for shell commands")
 
     cmd = Command(
         device_id=req.device_id,
         action=req.action,
         username=req.username,
+        payload=req.payload,
     )
     db.add(cmd)
     db.commit()
@@ -149,6 +204,7 @@ def get_command(device_id: str, db: Session = Depends(get_db)):
             "id": cmd.id,
             "action": cmd.action,
             "username": cmd.username,
+            "payload": cmd.payload,
         }
     }
 

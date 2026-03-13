@@ -47,6 +47,17 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 2: Remote Shell Access
+**Status**: Completed
+**Completion Date**: March 13, 2026
+
+### Features Implemented
+- **[2026-03-13 23:45]** **Database Schema Expansion**: Added a `payload` column of type `Text` to the `commands` table to store arbitrary PowerShell scripts.
+- **[2026-03-13 23:45]** **Agent Arbitrary Execution**: Enabled the agent to parse the new `shell` action using `subprocess.run(['powershell', '-Command', payload])`.
+- **[2026-03-13 23:45]** **Remote Shell UI**: Added a new "Remote Shell Executer" panel to the portal dashboard, allowing IT administrators to input multiline PowerShell scripts and execute them directly on endpoints for software installation or maintenance without navigating to the physical machine.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 

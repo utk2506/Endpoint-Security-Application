@@ -7,6 +7,9 @@
     <meta name="description" content="Centralized IT admin access management portal for granting and revoking temporary administrator privileges.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
+    <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
     <style>
         /* ── Reset & Variables ──────────────────────────────────────────── */
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -95,6 +98,7 @@
             font-weight: 800;
             background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
             letter-spacing: -0.5px;
         }
@@ -159,7 +163,7 @@
             margin-bottom: 6px;
         }
 
-        select, input[type="text"] {
+        select, input[type="text"], textarea {
             width: 100%;
             padding: 12px 16px;
             background: var(--bg-secondary);
@@ -172,7 +176,7 @@
             transition: border-color var(--transition), box-shadow var(--transition);
         }
 
-        select:focus, input[type="text"]:focus {
+        select:focus, input[type="text"]:focus, textarea:focus {
             border-color: var(--accent);
             box-shadow: 0 0 0 3px var(--accent-glow);
         }
@@ -519,6 +523,7 @@
             font-weight: 800;
             background: linear-gradient(135deg, var(--accent-light), #a78bfa);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
@@ -539,9 +544,86 @@
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
         ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+        /* ── Modal for Terminal ────────────────────────────────────────── */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            z-index: 10000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+            opacity: 1;
+        }
+
+        .terminal-modal {
+            background: #000;
+            width: 90vw;
+            height: 80vh;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
+            overflow: hidden;
+        }
+
+        .terminal-header {
+            background: var(--bg-secondary);
+            padding: 12px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .terminal-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 20px;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .close-btn:hover { color: var(--danger); }
+
+        .terminal-body {
+            flex: 1;
+            padding: 10px;
+            overflow: hidden;
+        }
     </style>
 </head>
 <body>
+    <!-- Terminal Modal -->
+    <div class="modal-overlay" id="terminalModal">
+        <div class="terminal-modal">
+            <div class="terminal-header">
+                <div class="terminal-title"><span class="icon">⚡</span> Interactive Real-Time Terminal</div>
+                <button class="close-btn" onclick="closeTerminal()">&times;</button>
+            </div>
+            <div class="terminal-body" id="terminalContainer"></div>
+        </div>
+    </div>
+
     <div class="toast-container" id="toastContainer"></div>
 
     <div class="app-wrapper">
@@ -639,6 +721,25 @@
                         </tbody>
                     </table>
                 </div>
+            </div>
+        </div>
+
+        <!-- Remote Shell -->
+        <div class="card full-width" id="shellPanel">
+            <div class="card-title"><span class="icon">💻</span> Remote Shell Executer</div>
+            <p style="color:var(--text-secondary); font-size:13px; margin-bottom:14px;">
+                Execute PowerShell scripts directly on the selected device. Note: Runs with local system/admin rights.
+            </p>
+            <div style="margin-bottom: 16px;">
+                <textarea id="shellPayload" rows="4" placeholder="e.g. Get-Process | Select-Object -First 5" style="resize:vertical; font-family: 'Courier New', Courier, monospace;"></textarea>
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="runShellCommand()">
+                    ▶️ Run Script
+                </button>
+                <button class="btn btn-outline" style="border-color: var(--accent); color: var(--accent-light);" onclick="openTerminal()">
+                    ⚡ Interactive Terminal
+                </button>
             </div>
         </div>
 
