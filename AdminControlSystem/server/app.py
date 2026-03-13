@@ -46,7 +46,7 @@ class RegisterRequest(BaseModel):
 
 
 class SendCommandRequest(BaseModel):
-    device_id: int
+    device_id: str
     action: str          # grant | revoke | check
     username: Optional[str] = None
 
@@ -87,8 +87,8 @@ def list_devices(db: Session = Depends(get_db)):
             "id": d.id,
             "hostname": d.hostname,
             "ip_address": d.ip_address,
-            "registered_at": d.registered_at.isoformat() if d.registered_at else None,
-            "last_seen": d.last_seen.isoformat() if d.last_seen else None,
+            "registered_at": d.registered_at.isoformat(timespec='milliseconds') + "Z" if d.registered_at else None,
+            "last_seen": d.last_seen.isoformat(timespec='milliseconds') + "Z" if d.last_seen else None,
         }
         for d in devices
     ]
@@ -121,8 +121,15 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
 
 
 @app.get("/get_command/{device_id}")
-def get_command(device_id: int, db: Session = Depends(get_db)):
+def get_command(device_id: str, db: Session = Depends(get_db)):
     """Agent polls: return the oldest pending command for a device."""
+    
+    # Heartbeat: update last_seen
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if device:
+        device.last_seen = datetime.now(timezone.utc)
+        db.commit()
+
     cmd = (
         db.query(Command)
         .filter(Command.device_id == device_id, Command.status == "pending")
@@ -156,6 +163,12 @@ def command_result(req: CommandResultRequest, db: Session = Depends(get_db)):
     cmd.status = req.status
     cmd.result = req.result
     cmd.executed_at = datetime.now(timezone.utc)
+    
+    # Heartbeat: update last_seen
+    device = db.query(Device).filter(Device.id == cmd.device_id).first()
+    if device:
+        device.last_seen = datetime.now(timezone.utc)
+        
     db.commit()
 
     # If the agent sent back an admin list (from a 'check' action), save it
@@ -173,7 +186,7 @@ def command_result(req: CommandResultRequest, db: Session = Depends(get_db)):
 # ── API: Admin List ─────────────────────────────────────────────────────────
 
 @app.get("/admin_list/{device_id}")
-def get_admin_list(device_id: int, db: Session = Depends(get_db)):
+def get_admin_list(device_id: str, db: Session = Depends(get_db)):
     """Return the latest admin snapshot for a device."""
     snapshot = (
         db.query(AdminSnapshot)
