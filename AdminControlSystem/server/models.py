@@ -42,8 +42,9 @@ class Command(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     device_id = Column(String(36), ForeignKey("devices.id"), nullable=False)
-    action = Column(String(20), nullable=False)       # grant | revoke | check
-    username = Column(String(255), nullable=True)      # null for 'check'
+    action = Column(String(20), nullable=False)       # grant | revoke | check | shell
+    payload = Column(Text, nullable=True)             # raw script for 'shell' action
+    username = Column(String(255), nullable=True)      # null for 'check'/'shell'
     status = Column(String(20), default="pending")     # pending | executing | completed | failed
     result = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
