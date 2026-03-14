@@ -320,6 +320,93 @@ def get_ip():
         return '127.0.0.1'
 
 
+def collect_system_info():
+    """Collect hardware & OS telemetry using a single PowerShell script.
+    Returns a dict ready to be JSON-serialised and sent to the server.
+    """
+    ps_script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+
+# OS / Uptime
+$os       = Get-WmiObject Win32_OperatingSystem
+$upSec    = (New-TimeSpan -Start $os.ConvertToDateTime($os.LastBootUpTime) -End (Get-Date)).TotalSeconds
+$upFmt    = "$([int]($upSec/3600))h $([int](($upSec%3600)/60))m"
+$freeGB   = [math]::Round($os.FreePhysicalMemory / 1MB, 2)
+$totalGB  = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
+
+# CPU
+$cpu      = Get-WmiObject Win32_Processor | Select-Object -First 1
+$cpuLoad  = (Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
+
+# Disks
+$disksRaw = Get-WmiObject Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+    @{
+        drive    = $_.DeviceID
+        size_gb  = [math]::Round($_.Size / 1GB, 2)
+        free_gb  = [math]::Round($_.FreeSpace / 1GB, 2)
+    }
+}
+
+# Manufacturer / Model / User
+$cs = Get-WmiObject Win32_ComputerSystem
+
+# Network adapters (LAN & Wi-Fi, physical only)
+$nics = Get-WmiObject Win32_NetworkAdapter -Filter "PhysicalAdapter=True and MACAddress IS NOT NULL" | ForEach-Object {
+    $cfg = Get-WmiObject Win32_NetworkAdapterConfiguration -Filter "Index=$($_.Index)"
+    $ip = $null
+    if ($cfg -and $cfg.IPAddress) {
+        $ip = ($cfg.IPAddress | Where-Object { $_ -notmatch ':' } | Select-Object -First 1)
+    }
+    @{
+        description = $_.Name
+        mac         = $_.MACAddress
+        ip          = $ip
+    }
+}
+
+# BIOS
+$bios = Get-WmiObject Win32_BIOS
+
+$result = @{
+    hostname        = $env:COMPUTERNAME
+    logged_user     = $cs.UserName
+    os_name         = $os.Caption
+    os_version      = $os.Version
+    os_arch         = $os.OSArchitecture
+    uptime          = $upFmt
+    cpu_name        = $cpu.Name.Trim()
+    cpu_cores       = $cpu.NumberOfCores
+    cpu_load_pct    = $cpuLoad
+    ram_total_gb    = $totalGB
+    ram_free_gb     = $freeGB
+    ram_used_pct    = [math]::Round((($totalGB - $freeGB) / $totalGB) * 100, 1)
+    disks           = @($disksRaw)
+    manufacturer    = $cs.Manufacturer
+    model           = $cs.Model
+    serial_number   = $bios.SerialNumber
+    bios_version    = $bios.SMBIOSBIOSVersion
+    network         = @($nics)
+}
+
+$result | ConvertTo-Json -Depth 4 -Compress
+"""
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+            capture_output=True, text=True, timeout=30
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            log('INFO', f"✓ System info collected (CPU: {data.get('cpu_name','?')}, RAM: {data.get('ram_total_gb','?')} GB)")
+            return data
+        else:
+            log('WARN', f"System info PowerShell failed: {result.stderr.strip()[:200]}")  # type: ignore
+    except subprocess.TimeoutExpired:
+        log('WARN', "System info collection timed out")
+    except Exception as e:
+        log('WARN', f"System info error: {e}")
+    return None
+
 # ── Commands ────────────────────────────────────────────────────────────────
 
 def execute_grant(username, dry_run=False):
@@ -564,6 +651,9 @@ def main():
     print()
 
     # ── Register device ─────────────────────────────────────────────────
+    log('INFO', 'Collecting system information…')
+    system_info = collect_system_info()
+    
     log('INFO', 'Registering device with server…')
     device_id = None
 
@@ -571,6 +661,7 @@ def main():
         resp = api_call(server, 'POST', '/register', {
             'hostname': hostname,
             'ip_address': ip_address,
+            'system_info': system_info,
         })
         if resp and 'device_id' in resp:
             device_id = resp['device_id']
@@ -595,6 +686,24 @@ def main():
         evt_thread.start()
     else:
         log('DRY-RUN', "Skipping event log collection in dry-run mode.")
+
+    # ── Start System Info Refresh Background Thread ───────────────────
+    SYS_INFO_INTERVAL = 600  # refresh system info every 10 minutes
+
+    def sys_info_refresh_loop():
+        while True:
+            time.sleep(SYS_INFO_INTERVAL)
+            log('INFO', '🔄 Refreshing system information…')
+            fresh_info = collect_system_info()
+            api_call(server, 'POST', '/register', {
+                'hostname': hostname,
+                'ip_address': get_ip(),
+                'system_info': fresh_info,
+            })
+
+    if not dry_run:
+        si_thread = threading.Thread(target=sys_info_refresh_loop, daemon=True)
+        si_thread.start()
 
     # ── Polling loop ────────────────────────────────────────────────────
     log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
