@@ -409,6 +409,34 @@ $result | ConvertTo-Json -Depth 4 -Compress
 
 # ── Commands ────────────────────────────────────────────────────────────────
 
+
+def collect_all_users():
+    """Collect all local user accounts using PowerShell Get-LocalUser.
+    Returns a list of dicts: [{name, enabled}]
+    """
+    ps_script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$users = Get-LocalUser | Select-Object Name, Enabled | ForEach-Object {
+    @{ name = $_.Name; enabled = [bool]$_.Enabled }
+}
+@($users) | ConvertTo-Json -Compress
+"""
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            # Ensure it's always a list
+            if isinstance(data, dict):
+                data = [data]
+            return data or []
+    except Exception as e:
+        log('WARN', f"collect_all_users error: {e}")
+    return []
+
+
 def execute_grant(username, dry_run=False):
     """Add a user to the local Administrators group using PowerShell."""
     ps_cmd = f'Add-LocalGroupMember -Group "Administrators" -Member "{username}"'
@@ -653,6 +681,8 @@ def main():
     # ── Register device ─────────────────────────────────────────────────
     log('INFO', 'Collecting system information…')
     system_info = collect_system_info()
+    log('INFO', 'Collecting all local users…')
+    all_users = collect_all_users()
     
     log('INFO', 'Registering device with server…')
     device_id = None
@@ -662,6 +692,7 @@ def main():
             'hostname': hostname,
             'ip_address': ip_address,
             'system_info': system_info,
+            'all_users': all_users,
         })
         if resp and 'device_id' in resp:
             device_id = resp['device_id']
@@ -695,10 +726,12 @@ def main():
             time.sleep(SYS_INFO_INTERVAL)
             # Fetching silently in background
             fresh_info = collect_system_info()
+            fresh_users = collect_all_users()
             api_call(server, 'POST', '/register', {
                 'hostname': hostname,
                 'ip_address': get_ip(),
                 'system_info': fresh_info,
+                'all_users': fresh_users,
             })
 
     if not dry_run:

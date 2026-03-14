@@ -96,6 +96,7 @@ class RegisterRequest(BaseModel):
     hostname: str
     ip_address: str
     system_info: Optional[dict] = None
+    all_users: Optional[list[dict]] = None
 
 
 class SendCommandRequest(BaseModel):
@@ -119,6 +120,7 @@ class CommandResultRequest(BaseModel):
 def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new device or update last_seen for an existing one."""
     sys_info_str = json.dumps(req.system_info) if req.system_info else None
+    all_users_str = json.dumps(req.all_users) if req.all_users else None
 
     device = db.query(Device).filter(Device.hostname == req.hostname).first()
     if device:
@@ -126,11 +128,13 @@ def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
         device.last_seen = datetime.now(timezone.utc)
         if sys_info_str:
             device.system_info = sys_info_str
+        if all_users_str:
+            device.all_users = all_users_str
         db.commit()
         db.refresh(device)
         return {"message": "Device updated", "device_id": device.id}
 
-    device = Device(hostname=req.hostname, ip_address=req.ip_address, system_info=sys_info_str)
+    device = Device(hostname=req.hostname, ip_address=req.ip_address, system_info=sys_info_str, all_users=all_users_str)
     db.add(device)
     db.commit()
     db.refresh(device)
@@ -155,6 +159,7 @@ def list_devices(db: Session = Depends(get_db)):
             "registered_at": d.registered_at.isoformat(timespec='milliseconds') + "Z" if d.registered_at else None,
             "last_seen": d.last_seen.isoformat(timespec='milliseconds') + "Z" if d.last_seen else None,
             "system_info": parse_sys_info(d.system_info),
+            "all_users": parse_sys_info(d.all_users),
         }
         for d in devices
     ]

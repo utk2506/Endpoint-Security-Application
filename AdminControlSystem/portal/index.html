@@ -777,8 +777,10 @@
                 </div>
 
                 <div style="margin-bottom: 16px;">
-                    <label for="usernameInput">Username</label>
-                    <input type="text" id="usernameInput" placeholder="e.g. rahul">
+                    <label for="userSelect">Select User</label>
+                    <select id="userSelect" style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;" onchange="updateCommandButtons()">
+                        <option value="">— Select a user —</option>
+                    </select>
                 </div>
 
                 <div style="margin-bottom: 16px;" id="expiryRow">

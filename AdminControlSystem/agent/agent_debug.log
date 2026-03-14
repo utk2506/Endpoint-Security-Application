@@ -895,3 +895,261 @@ operation..
 At line:1 char:1
 + Get-WinEvent -FilterHashtable @{LogName='Security'; St
 [2026-03-14 20:24:54] [ERROR]  PowerShell Application failed: 
+[2026-03-14 21:08:07] [INFO]  Collecting system information…
+[2026-03-14 21:08:11] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:08:11] [INFO]  Registering device with server…
+[2026-03-14 21:08:14] [INFO]  Registered as device #3920c1f3-6829-46d2-bdb1-6654f7b18780
+[2026-03-14 21:08:14] [INFO]  📋 Event Log Collector started (interval: 60s)
+[2026-03-14 21:08:14] [INFO]  Agent Elevation: Standard User
+[2026-03-14 21:08:14] [INFO]  Polling for commands every 5s…
+[2026-03-14 21:08:14] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:08:15] [ERROR]  PowerShell Security failed: Get-WinEvent : Could not retrieve information about the Security log. Error: Attempted to perform an unauthorized 
+operation..
+At line:1 char:1
++ Get-WinEvent -FilterHashtable @{LogName='Security'; StartTime=(Get-Da ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + Ca
+[2026-03-14 21:08:15] [WARN]  Error querying Security: Get-WinEvent : Could not retrieve information about the Security log. Error: Attempted to perform an unauthorized 
+operation..
+At line:1 char:1
++ Get-WinEvent -FilterHashtable @{LogName='Security'; St
+[2026-03-14 21:08:16] [INFO]  Connected to Interactive Shell Relay — starting PTY
+[2026-03-14 21:08:18] [INFO]  📋 Collected 2 event log(s), sending to server…
+[2026-03-14 21:08:20] [INFO]  ✓ Sent 2 event logs to server
+[2026-03-14 21:08:27] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:08:43] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:08:59] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:09:14] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:09:20] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:09:21] [ERROR]  PowerShell Security failed: Get-WinEvent : Could not retrieve information about the Security log. Error: Attempted to perform an unauthorized 
+operation..
+At line:1 char:1
++ Get-WinEvent -FilterHashtable @{LogName='Security'; StartTime=(Get-Da ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + Ca
+[2026-03-14 21:09:21] [WARN]  Error querying Security: Get-WinEvent : Could not retrieve information about the Security log. Error: Attempted to perform an unauthorized 
+operation..
+At line:1 char:1
++ Get-WinEvent -FilterHashtable @{LogName='Security'; St
+[2026-03-14 21:09:22] [INFO]  📋 Collected 2 event log(s), sending to server…
+[2026-03-14 21:09:24] [INFO]  ✓ Sent 2 event logs to server
+[2026-03-14 21:09:30] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:09:41] [INFO]  ⬇ Command #2: revoke AzureAD\ITSupport
+[2026-03-14 21:09:42] [WARN]  ✗ Remove-LocalGroupMember -Group "Administrators" -Member "AzureAD\ITSupport" -Confirm:$false → Remove-LocalGroupMember : Access denied.
+At line:1 char:1
++ Remove-LocalGroupMember -Group "Administrators" -Member "AzureAD\ITSu ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : PermissionDenied: (Administrators:String) [Remove-LocalGroupMember], AccessDeniedExcepti 
+   on
+    + FullyQualifiedErrorId : AccessDenied,Microsoft.PowerShell.Commands.RemoveLocalGroupMemberCommand
+[2026-03-14 21:09:44] [INFO]  ⬆ Result for #2 reported: failed
+[2026-03-14 21:09:47] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:10:02] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:10:14] [INFO]  Collecting system information…
+[2026-03-14 21:10:18] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:10:18] [INFO]  Registering device with server…
+[2026-03-14 21:10:20] [INFO]  Registered as device #3920c1f3-6829-46d2-bdb1-6654f7b18780
+[2026-03-14 21:10:20] [INFO]  📋 Event Log Collector started (interval: 60s)
+[2026-03-14 21:10:20] [INFO]  Agent Elevation: Administrator
+[2026-03-14 21:10:20] [INFO]  Polling for commands every 5s…
+ter in Python)…
+[2026-03-14 21:10:22] [INFO]  Connected to Interactive Shell Relay — starting PTY
+[2026-03-14 21:10:23] [INFO]  📋 Security: found 132 matching events out of 173 raw events
+[2026-03-14 21:10:24] [INFO]  📋 Collected 134 event log(s), sending to server…
+[2026-03-14 21:10:26] [INFO]  ✓ Sent 134 event logs to server
+[2026-03-14 21:10:29] [INFO]  ⬇ Command #3: revoke AzureAD\ITSupport
+[2026-03-14 21:10:31] [INFO]  ✓ Remove-LocalGroupMember -Group "Administrators" -Member "AzureAD\ITSupport" -Confirm:$false → 
+[2026-03-14 21:10:34] [INFO]  ⬆ Result for #3 reported: completed
+[2026-03-14 21:10:35] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:10:51] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:11:07] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:11:22] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:11:26] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:11:27] [INFO]  📋 Security: found 3 matching events out of 3 raw events
+[2026-03-14 21:11:28] [INFO]  📋 Collected 5 event log(s), sending to server…
+[2026-03-14 21:11:30] [INFO]  ✓ Sent 5 event logs to server
+[2026-03-14 21:11:38] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:11:54] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:12:10] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:12:25] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:12:30] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:12:31] [INFO]  📋 Security: found 18 matching events out of 21 raw events
+[2026-03-14 21:12:32] [INFO]  📋 Collected 20 event log(s), sending to server…
+[2026-03-14 21:12:34] [INFO]  ✓ Sent 20 event logs to server
+[2026-03-14 21:12:41] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:12:56] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:13:02] [INFO]  ⬇ Command #4: check 
+[2026-03-14 21:13:03] [INFO]  Admin members: ['Administrator', 'AzureAD\\ITSupport', 'Chimera', 'test1']
+[2026-03-14 21:13:05] [INFO]  ⬆ Result for #4 reported: completed
+[2026-03-14 21:13:12] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:13:28] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:13:33] [INFO]  ⬇ Command #5: revoke test1
+[2026-03-14 21:13:34] [INFO]  ✓ Remove-LocalGroupMember -Group "Administrators" -Member "test1" -Confirm:$false → 
+[2026-03-14 21:13:34] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:13:35] [INFO]  📋 Security: found 11 matching events out of 22 raw events
+[2026-03-14 21:13:36] [INFO]  ⬆ Result for #5 reported: completed
+[2026-03-14 21:13:38] [INFO]  📋 Collected 13 event log(s), sending to server…
+[2026-03-14 21:13:40] [INFO]  ✓ Sent 13 event logs to server
+[2026-03-14 21:13:44] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:13:59] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:14:15] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:14:31] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:14:40] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:14:41] [INFO]  📋 Security: found 5 matching events out of 13 raw events
+[2026-03-14 21:14:43] [INFO]  📋 Collected 7 event log(s), sending to server…
+[2026-03-14 21:14:45] [INFO]  ✓ Sent 7 event logs to server
+[2026-03-14 21:14:46] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:15:01] [INFO]  ⬇ Command #6: grant test1
+[2026-03-14 21:15:02] [INFO]  ✓ Add-LocalGroupMember -Group "Administrators" -Member "test1" → 
+[2026-03-14 21:15:02] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:15:04] [INFO]  ⬆ Result for #6 reported: completed
+[2026-03-14 21:15:18] [INFO]  ⬇ Command #7: revoke test1
+[2026-03-14 21:15:18] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:15:18] [INFO]  ✓ Remove-LocalGroupMember -Group "Administrators" -Member "test1" -Confirm:$false → 
+[2026-03-14 21:15:20] [INFO]  ⬆ Result for #7 reported: completed
+[2026-03-14 21:15:27] [INFO]  ⬇ Command #8: check 
+[2026-03-14 21:15:28] [INFO]  Admin members: ['Administrator', 'AzureAD\\ITSupport', 'Chimera']
+[2026-03-14 21:15:30] [INFO]  ⬆ Result for #8 reported: completed
+[2026-03-14 21:15:34] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:15:44] [INFO]  ⬇ Command #9: check 
+[2026-03-14 21:15:45] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:15:45] [INFO]  Admin members: ['Administrator', 'AzureAD\\ITSupport', 'Chimera']
+[2026-03-14 21:15:45] [INFO]  📋 Security: found 8 matching events out of 17 raw events
+[2026-03-14 21:15:47] [INFO]  ⬆ Result for #9 reported: completed
+[2026-03-14 21:15:48] [INFO]  📋 Collected 10 event log(s), sending to server…
+[2026-03-14 21:15:50] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:15:50] [INFO]  ✓ Sent 10 event logs to server
+[2026-03-14 21:16:06] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:16:15] [INFO]  ⬇ Command #10: grant test1
+[2026-03-14 21:16:16] [INFO]  ✓ Add-LocalGroupMember -Group "Administrators" -Member "test1" → 
+[2026-03-14 21:16:18] [INFO]  ⬆ Result for #10 reported: completed
+[2026-03-14 21:16:22] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:16:38] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:16:39] [INFO]  ⬇ Command #11: check 
+[2026-03-14 21:16:40] [INFO]  Admin members: ['Administrator', 'AzureAD\\ITSupport', 'Chimera', 'test1']
+[2026-03-14 21:16:43] [INFO]  ⬆ Result for #11 reported: completed
+[2026-03-14 21:16:50] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:16:52] [INFO]  📋 Security: found 5 matching events out of 29 raw events
+[2026-03-14 21:16:54] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:16:54] [INFO]  📋 Collected 7 event log(s), sending to server…
+[2026-03-14 21:16:56] [INFO]  ✓ Sent 7 event logs to server
+[2026-03-14 21:17:09] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:17:18] [INFO]  ⬇ Command #12: revoke test1
+[2026-03-14 21:17:19] [INFO]  ✓ Remove-LocalGroupMember -Group "Administrators" -Member "test1" -Confirm:$false → 
+[2026-03-14 21:17:21] [INFO]  ⬆ Result for #12 reported: completed
+[2026-03-14 21:17:25] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:17:40] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:17:56] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:17:56] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:17:57] [INFO]  📋 Security: found 3 matching events out of 11 raw events
+[2026-03-14 21:17:58] [INFO]  📋 Collected 5 event log(s), sending to server…
+[2026-03-14 21:18:00] [INFO]  ✓ Sent 5 event logs to server
+[2026-03-14 21:18:11] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:18:27] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:18:42] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:18:58] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:19:00] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:19:01] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:19:04] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:19:06] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:19:13] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:19:29] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:19:45] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:20:00] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:20:06] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:20:07] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:20:08] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:20:10] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:20:16] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:20:31] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:20:47] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:21:02] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:21:10] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:21:11] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:21:12] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:21:14] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:21:18] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:21:33] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:21:49] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:22:04] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:22:14] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:22:14] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:22:16] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:22:18] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:22:20] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:22:35] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:22:51] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:23:07] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:23:18] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:23:19] [INFO]  📋 Security: found 4 matching events out of 4 raw events
+[2026-03-14 21:23:20] [INFO]  📋 Collected 6 event log(s), sending to server…
+[2026-03-14 21:23:22] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:23:22] [INFO]  ✓ Sent 6 event logs to server
+[2026-03-14 21:23:38] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:23:53] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:24:09] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:24:22] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:24:24] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:24:26] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:24:27] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:24:29] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:24:42] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:24:58] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:25:13] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:25:29] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:25:29] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:25:30] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:25:32] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:25:34] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:25:45] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:26:01] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:26:16] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:26:32] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:26:34] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:26:35] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:26:36] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:26:38] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:26:47] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:27:03] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:27:05] [ERROR]  API POST /register → 500: Internal Server Error
+[2026-03-14 21:27:10] [ERROR]  API GET /get_command/3920c1f3-6829-46d2-bdb1-6654f7b18780 → 500: Internal Server Error
+[2026-03-14 21:27:17] [ERROR]  API GET /get_command/3920c1f3-6829-46d2-bdb1-6654f7b18780 → 500: Internal Server Error
+[2026-03-14 21:27:18] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:27:20] [ERROR]  API POST /register → 500: Internal Server Error
+[2026-03-14 21:27:24] [ERROR]  API GET /get_command/3920c1f3-6829-46d2-bdb1-6654f7b18780 → 500: Internal Server Error
+[2026-03-14 21:27:31] [ERROR]  API GET /get_command/3920c1f3-6829-46d2-bdb1-6654f7b18780 → 500: Internal Server Error
+[2026-03-14 21:27:34] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:27:36] [ERROR]  API POST /register → 500: Internal Server Error
+[2026-03-14 21:27:38] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:27:39] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:27:41] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:27:43] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:27:49] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:28:05] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:28:21] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:28:40] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:28:43] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:28:44] [INFO]  📋 Security: found 2 matching events out of 2 raw events
+[2026-03-14 21:28:45] [INFO]  📋 Collected 4 event log(s), sending to server…
+[2026-03-14 21:28:47] [INFO]  ✓ Sent 4 event logs to server
+[2026-03-14 21:28:57] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:29:12] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:29:29] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:29:46] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:29:47] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:29:48] [INFO]  📋 Security: found 4 matching events out of 12 raw events
+[2026-03-14 21:29:51] [INFO]  📋 Collected 6 event log(s), sending to server…
+[2026-03-14 21:29:53] [INFO]  ✓ Sent 6 event logs to server
+[2026-03-14 21:30:02] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:30:19] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:30:35] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:30:40] [INFO]  ⬇ Command #13: check 
+[2026-03-14 21:30:41] [INFO]  Admin members: ['Administrator', 'AzureAD\\ITSupport', 'Chimera']
+[2026-03-14 21:30:43] [INFO]  ⬆ Result for #13 reported: completed
+[2026-03-14 21:30:50] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:30:53] [DEBUG]  Querying Security log (broad, filter in Python)…
+[2026-03-14 21:30:53] [INFO]  📋 Security: found 3 matching events out of 19 raw events
+[2026-03-14 21:30:55] [INFO]  📋 Collected 5 event log(s), sending to server…
+[2026-03-14 21:30:57] [INFO]  ✓ Sent 5 event logs to server
+[2026-03-14 21:31:06] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)
+[2026-03-14 21:31:22] [INFO]  ✓ System info collected (CPU: Intel(R) Core(TM) i3-8145U CPU @ 2.10GHz, RAM: 15.88 GB)

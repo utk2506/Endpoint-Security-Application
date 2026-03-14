@@ -144,13 +144,77 @@ async function loadDevices() {
 // (...) unchanged code up to Command History
 
 
+let currentAdminList = [];
+
 $('deviceSelect')?.addEventListener('change', function () {
     selectedDeviceId = this.value ? this.value : null;
     hideResult();
     if (selectedDeviceId) {
+        populateUserDropdown();
         refreshAdminList();
+    } else {
+        const select = $('userSelect');
+        if (select) select.innerHTML = '<option value="">— Select a user —</option>';
+        updateCommandButtons();
     }
 });
+
+function populateUserDropdown() {
+    const select = $('userSelect');
+    if (!select || !selectedDeviceId) return;
+
+    const device = _deviceCache.find(d => d.id == selectedDeviceId);
+    if (!device || !device.all_users) {
+        select.innerHTML = '<option value="">— User list unavailable —</option>';
+        updateCommandButtons();
+        return;
+    }
+
+    const currentVal = select.value;
+    select.innerHTML = '<option value="">— Select a user —</option>';
+
+    device.all_users.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.name;
+        opt.textContent = `${u.enabled ? '👤' : '🚫'} ${u.name}`;
+        select.appendChild(opt);
+    });
+
+    if (currentVal) select.value = currentVal;
+    updateCommandButtons();
+}
+
+function updateCommandButtons() {
+    const select = $('userSelect');
+    const btnGrant = $('btnGrant');
+    const btnRevoke = $('btnRevoke');
+    
+    if (!select || !btnGrant || !btnRevoke) return;
+
+    const username = select.value;
+
+    if (!username) {
+        btnGrant.disabled = false;
+        btnRevoke.disabled = false;
+        btnGrant.style.opacity = '1';
+        btnRevoke.style.opacity = '1';
+        return;
+    }
+
+    const isAdmin = currentAdminList.includes(username);
+
+    if (isAdmin) {
+        btnGrant.disabled = true;
+        btnGrant.style.opacity = '0.4';
+        btnRevoke.disabled = false;
+        btnRevoke.style.opacity = '1';
+    } else {
+        btnGrant.disabled = false;
+        btnGrant.style.opacity = '1';
+        btnRevoke.disabled = true;
+        btnRevoke.style.opacity = '0.4';
+    }
+}
 
 // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -176,9 +240,9 @@ async function checkStatus() {
 }
 
 async function grantAdmin() {
-    const username = $('usernameInput').value.trim();
+    const username = $('userSelect').value.trim();
     if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
-    if (!username) { toast('Enter a username', 'error'); return; }
+    if (!username) { toast('Select a user', 'error'); return; }
 
     // Read optional expiry (datetime-local gives local time; convert to UTC ISO string)
     let expiresAt = null;
@@ -210,9 +274,9 @@ async function grantAdmin() {
 }
 
 async function revokeAdmin() {
-    const username = $('usernameInput').value.trim();
+    const username = $('userSelect').value.trim();
     if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
-    if (!username) { toast('Enter a username', 'error'); return; }
+    if (!username) { toast('Select a user', 'error'); return; }
 
     try {
         showResult('info', '🔄', `Revoking admin from "${username}"…`);
@@ -432,6 +496,7 @@ async function refreshAdminList() {
         const tbody = $('adminTableBody');
 
         if (!data.admin_users || data.admin_users.length === 0) {
+            currentAdminList = [];
             tbody.innerHTML = `<tr><td colspan="3">
                 <div class="empty-state">
                     <span class="icon">📋</span>
@@ -439,10 +504,13 @@ async function refreshAdminList() {
                 </div>
             </td></tr>`;
             $('statAdmins').textContent = '0';
+            updateCommandButtons();
             return;
         }
 
+        currentAdminList = data.admin_users;
         $('statAdmins').textContent = data.admin_users.length;
+        updateCommandButtons();
 
         tbody.innerHTML = data.admin_users.map(user => {
             const safeUser = escapeAttr(user.replace(/\\/g, '\\\\'));
@@ -464,7 +532,14 @@ async function refreshAdminList() {
 }
 
 function quickRevoke(username) {
-    $('usernameInput').value = username;
+    const select = $('userSelect');
+    if (select) {
+        // Attempt to select the user in the dropdown, but if they aren't in all_users,
+        // we might not match. Just set the value anyway.
+        select.innerHTML = `<option value="${escapeAttr(username)}">${escapeHtml(username)}</option>` + select.innerHTML;
+        select.value = username;
+        updateCommandButtons();
+    }
     revokeAdmin();
 }
 
