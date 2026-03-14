@@ -7,6 +7,7 @@ const API_BASE = window.location.origin;
 const WS_BASE = window.location.origin.replace('http', 'ws');
 let selectedDeviceId = null;
 let pollInterval = null;
+let _deviceCache = [];  // cache of all devices with their all_users payload
 
 // Terminal State
 let term = null;
@@ -1178,7 +1179,6 @@ function closeLogDetailsModal() {
 
 // ── System Info Modal ─────────────────────────────────────────────────────
 
-let _deviceCache = [];  // maintained by loadDevices()
 
 function openSysInfoModal() {
     const deviceId = selectedDeviceId;

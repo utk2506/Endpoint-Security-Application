@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse  # type: ignore
 from pydantic import BaseModel  # type: ignore
 from sqlalchemy.orm import Session  # type: ignore
 
-from models import SessionLocal, Device, Command, AdminSnapshot, EventLog  # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -174,13 +174,8 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-<<<<<<< HEAD
     if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify"):
         raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, or notify")
-=======
-    if req.action not in ("grant", "revoke", "check", "shell", "create_user"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, or create_user")
->>>>>>> origin/development
 
     if req.action in ("grant", "revoke", "create_user") and not req.username:
         raise HTTPException(status_code=400, detail="Username required for grant/revoke/create_user")
@@ -522,8 +517,6 @@ def get_event_log_summary(
         "by_event_name": summary
     }
 
-
-<<<<<<< HEAD
 # ── API: Scheduled Notifications ───────────────────────────────────────────
 
 class NotificationCreateRequest(BaseModel):
@@ -612,7 +605,6 @@ def delete_notification(campaign_id: int, db: Session = Depends(get_db)):
     camp.is_active = False
     db.commit()
     return {"message": "Campaign cancelled successfully"}
-=======
 
 # ── Auto-Revoke Background Scheduler ────────────────────────────────────────
 
@@ -657,7 +649,7 @@ def _auto_revoke_loop():
 _revoke_thread = threading.Thread(target=_auto_revoke_loop, daemon=True)
 _revoke_thread.start()
 
->>>>>>> origin/development
+
 
 # ── Serve Portal Static Files ───────────────────────────────────────────────
 

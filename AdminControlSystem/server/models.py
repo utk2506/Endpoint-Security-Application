@@ -6,11 +6,7 @@ Uses SQLAlchemy ORM with SQLite.
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (  # type: ignore
-<<<<<<< HEAD
-    Column, Integer, String, DateTime, Text, ForeignKey, create_engine, Boolean
-=======
     Column, Integer, String, DateTime, Text, ForeignKey, Boolean, create_engine
->>>>>>> origin/development
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore
 

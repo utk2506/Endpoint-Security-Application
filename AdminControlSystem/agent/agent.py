@@ -831,16 +831,16 @@ def main():
                     success, output, admin_list = execute_check(dry_run)
                     report_result(server, cmd_id, success, output, admin_list)
 
+                elif action == 'shell':
+                    success, output = execute_shell(payload, dry_run)
+                    report_result(server, cmd_id, success, output)
+
                 elif action == 'create_user':
                     success, output = execute_create_user(username, payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 elif action == 'notify':
                     success, output = execute_notify(payload, dry_run)
-                    report_result(server, cmd_id, success, output)
-
-                elif action == 'create_user':
-                    success, output = execute_create_user(username, payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 else:
