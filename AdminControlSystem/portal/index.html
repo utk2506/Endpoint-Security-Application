@@ -781,6 +781,16 @@
                     <input type="text" id="usernameInput" placeholder="e.g. rahul">
                 </div>
 
+                <div style="margin-bottom: 16px;" id="expiryRow">
+                    <label for="expiresAtInput" style="display:flex; align-items:center; gap:6px;">
+                        ⏱ Auto-Revoke At
+                        <span style="font-size:11px; color:var(--text-secondary); font-weight:400;">(optional — leave blank for permanent)</span>
+                    </label>
+                    <input type="datetime-local" id="expiresAtInput"
+                        style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px;
+                               color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;">
+                </div>
+
                 <div class="btn-group">
                     <button class="btn btn-primary" id="btnCheck" onclick="checkStatus()">
                         🔍 Check Status

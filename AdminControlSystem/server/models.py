@@ -6,7 +6,7 @@ Uses SQLAlchemy ORM with SQLite.
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (  # type: ignore
-    Column, Integer, String, DateTime, Text, ForeignKey, create_engine
+    Column, Integer, String, DateTime, Text, ForeignKey, Boolean, create_engine
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore
 
@@ -51,6 +51,8 @@ class Command(Base):
     result = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     executed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)         # UTC; NULL = no expiry
+    auto_revoked = Column(Boolean, default=False)        # True once server auto-queued a revoke
 
     device = relationship("Device", back_populates="commands")
 

@@ -4,6 +4,8 @@ FastAPI application serving REST API + static portal files.
 """
 
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict
@@ -101,6 +103,7 @@ class SendCommandRequest(BaseModel):
     action: str          # grant | revoke | check | shell
     username: Optional[str] = None
     payload: Optional[str] = None
+    expires_at: Optional[str] = None   # ISO-8601 UTC string, e.g. "2026-03-14T18:30:00Z"
 
 
 class CommandResultRequest(BaseModel):
@@ -175,11 +178,20 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if req.action == "shell" and not req.payload:
         raise HTTPException(status_code=400, detail="Payload required for shell commands")
 
+    # Parse optional expiry time
+    expires_at_dt = None
+    if req.expires_at:
+        try:
+            expires_at_dt = datetime.fromisoformat(req.expires_at.replace('Z', '+00:00')).replace(tzinfo=None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid expires_at format. Use ISO-8601 e.g. 2026-03-14T18:30:00Z")
+
     cmd = Command(
         device_id=req.device_id,
         action=req.action,
         username=req.username,
         payload=req.payload,
+        expires_at=expires_at_dt,
     )
     db.add(cmd)
     db.commit()
@@ -332,6 +344,8 @@ def command_history(
             "result": c.result,
             "created_at": c.created_at.isoformat(timespec='milliseconds') + "Z" if c.created_at else None,
             "executed_at": c.executed_at.isoformat(timespec='milliseconds') + "Z" if c.executed_at else None,
+            "expires_at": c.expires_at.isoformat(timespec='milliseconds') + "Z" if c.expires_at else None,
+            "auto_revoked": c.auto_revoked or False,
         })
         
     return {
@@ -496,6 +510,50 @@ def get_event_log_summary(
         "privilege_events": sum(summary.get(e, 0) for e in privilege_events),
         "by_event_name": summary
     }
+
+
+
+# ── Auto-Revoke Background Scheduler ────────────────────────────────────────
+
+def _auto_revoke_loop():
+    """Runs every 15 seconds; finds expired grant commands and queues revokes."""
+    import time as _time
+    while True:
+        _time.sleep(15)
+        try:
+            db = SessionLocal()
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            expired = (
+                db.query(Command)
+                .filter(
+                    Command.action == "grant",
+                    Command.status == "completed",
+                    Command.auto_revoked == False,
+                    Command.expires_at != None,
+                    Command.expires_at <= now_utc,
+                )
+                .all()
+            )
+            for grant_cmd in expired:
+                # Queue an auto-revoke for this user
+                revoke_cmd = Command(
+                    device_id=grant_cmd.device_id,
+                    action="revoke",
+                    username=grant_cmd.username,
+                )
+                db.add(revoke_cmd)
+                grant_cmd.auto_revoked = True
+            if expired:
+                db.commit()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+
+# Start the auto-revoke watcher in background when the module loads
+_revoke_thread = threading.Thread(target=_auto_revoke_loop, daemon=True)
+_revoke_thread.start()
 
 
 # ── Serve Portal Static Files ───────────────────────────────────────────────

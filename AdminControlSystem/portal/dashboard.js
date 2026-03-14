@@ -180,15 +180,28 @@ async function grantAdmin() {
     if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
     if (!username) { toast('Enter a username', 'error'); return; }
 
+    // Read optional expiry (datetime-local gives local time; convert to UTC ISO string)
+    let expiresAt = null;
+    const expiresAtInput = $('expiresAtInput');
+    if (expiresAtInput && expiresAtInput.value) {
+        expiresAt = new Date(expiresAtInput.value).toISOString();
+    }
+
     try {
         showResult('info', '🔄', `Granting admin to "${username}"…`);
         await api('POST', '/send_command', {
             device_id: selectedDeviceId,
             action: 'grant',
             username,
+            expires_at: expiresAt,
         });
-        toast(`Grant command queued for "${username}"`, 'success');
-        showResult('success', '✅', `Grant command queued for "${username}"`);
+
+        const msg = expiresAt
+            ? `Grant queued for "${username}" — auto-revoke at ${new Date(expiresAt).toLocaleString()}`
+            : `Grant command queued for "${username}"`;
+        toast(msg, 'success');
+        showResult('success', '✅', msg);
+        if (expiresAtInput) expiresAtInput.value = '';   // clear after sending
         loadHistory();
     } catch (e) {
         showResult('error', '❌', e.message);
@@ -587,10 +600,34 @@ async function loadHistory() {
             if (timeStr && !timeStr.endsWith('Z')) timeStr += 'Z';
             const time = formatDate(timeStr);
 
+            // Build expiry badge for grant commands
+            let expiryBadge = '';
+            if (c.action === 'grant' && c.expires_at) {
+                if (c.auto_revoked) {
+                    expiryBadge = ` <span style="font-size:10px; background:rgba(34,197,94,0.15); color:#22c55e;
+                        border:1px solid rgba(34,197,94,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        🔄 Auto-Revoked</span>`;
+                } else {
+                    const expMs = new Date(c.expires_at).getTime() - Date.now();
+                    if (expMs > 0) {
+                        const h = Math.floor(expMs / 3600000);
+                        const m = Math.floor((expMs % 3600000) / 60000);
+                        const countdown = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                        expiryBadge = ` <span style="font-size:10px; background:rgba(251,189,35,0.15); color:#fbbf24;
+                            border:1px solid rgba(251,189,35,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                            ⏱ ${countdown}</span>`;
+                    } else {
+                        expiryBadge = ` <span style="font-size:10px; background:rgba(239,68,68,0.15); color:#ef4444;
+                            border:1px solid rgba(239,68,68,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                            ⏱ Expiring…</span>`;
+                    }
+                }
+            }
+
             return `<tr>
                 <td style="font-weight:600; color:var(--text-primary)">#${c.id}</td>
                 <td>${escapeHtml(c.device_hostname)}</td>
-                <td>${actionIcons[c.action] || ''} ${c.action}</td>
+                <td>${actionIcons[c.action] || ''} ${c.action}${expiryBadge}</td>
                 <td>${c.username ? escapeHtml(c.username) : '—'}</td>
                 <td><span class="badge ${statusClass}"><span class="badge-dot"></span>${c.status}</span></td>
                 <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
