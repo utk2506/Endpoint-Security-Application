@@ -603,6 +603,75 @@
             transition: color 0.2s;
         }
 
+        /* ── System Info Modal ────────────────────────────────────────── */
+        .sysinfo-modal {
+            background: var(--bg-secondary);
+            width: 800px;
+            max-width: 95vw;
+            max-height: 90vh;
+            border-radius: var(--radius);
+            border: 1px solid var(--border-glow);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 0 60px rgba(99, 102, 241, 0.3);
+            animation: slideUp 0.3s ease;
+        }
+        .sysinfo-header {
+            background: linear-gradient(135deg, #1e1b4b, #1a1f35);
+            padding: 16px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--border-glow);
+        }
+        .sysinfo-title {
+            font-size: 16px;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .sysinfo-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .sysinfo-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 14px;
+        }
+        .sysinfo-card {
+            background: rgba(99, 102, 241, 0.06);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+        }
+        .sysinfo-card-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-light);
+            margin-bottom: 10px;
+        }
+        .sysinfo-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            padding: 4px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .sysinfo-row:last-child { border-bottom: none; }
+        .sysinfo-label { color: var(--text-secondary); }
+        .sysinfo-value { color: var(--text-primary); font-weight: 500; text-align: right; max-width: 55%; word-break: break-word; }
+        .sysinfo-bar-wrap { margin-top: 6px; }
+        .sysinfo-bar-track { background: rgba(255,255,255,0.08); border-radius: 999px; height: 6px; overflow: hidden; }
+        .sysinfo-bar-fill { height: 100%; border-radius: 999px; transition: width 0.6s ease; }
+        .sysinfo-card.full-width { grid-column: 1 / -1; }
+
         .close-btn:hover { color: var(--danger); }
 
         .terminal-body {
@@ -646,6 +715,20 @@
         </div>
     </div>
 
+    <!-- System Info Modal -->
+    <div class="modal-overlay" id="sysInfoModal" onclick="closeSysInfoModal(event)">
+        <div class="sysinfo-modal" onclick="event.stopPropagation()">
+            <div class="sysinfo-header">
+                <div class="sysinfo-title">🖥️ System Information — <span id="sysInfoDeviceName" style="color: var(--accent-light);">—</span></div>
+                <button class="close-btn" onclick="closeSysInfoModal()">&#215;</button>
+            </div>
+            <div class="sysinfo-body" id="sysInfoBody">
+                <div style="text-align:center; color: var(--text-secondary); padding: 40px;">
+                    Loading system information…
+                </div>
+            </div>
+        </div>
+    </div>
     <div class="toast-container" id="toastContainer"></div>
 
     <div class="app-wrapper">
@@ -707,6 +790,9 @@
                     </button>
                     <button class="btn btn-danger" id="btnRevoke" onclick="revokeAdmin()">
                         🚫 Revoke Admin
+                    </button>
+                    <button class="btn btn-outline" id="btnSysInfo" onclick="openSysInfoModal()" style="padding: 10px 16px;">
+                        🖥️ System Info
                     </button>
                 </div>
 

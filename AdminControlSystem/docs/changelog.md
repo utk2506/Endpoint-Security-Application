@@ -115,6 +115,19 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 6: System Information Collection
+**Status**: Completed  
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14 18:07]** **Backend Telemetry Integration**: Extended the `Device` model with a `system_info` column and updated the `/register` and `/devices` APIs to store and transmit hardware JSON blobs.
+- **[2026-03-14 18:49]** **Agent Hardware Collector**: Implemented `collect_system_info()` using a robust PowerShell script to query WMI for Hostname, User, OS, Uptime, CPU (name, cores, load), RAM (total, used, free), Disks, and all physical Network adapters (including offline LAN/Wi-Fi MACs).
+- **[2026-03-14 18:58]** **Real-Time Telemetry Refresh**: Tuned the agent background thread to refresh and re-submit device system info every 10 seconds (optimized from 10 minutes).
+- **[2026-03-14 19:07]** **Premium System Info UI**: Deployed a new "System Info" button in the Command Panel, triggering an animated glassmorphism modal with color-shifting progress bars (Green/Yellow/Red) for visualizing hardware utilization.
+- **[2026-03-14 19:11]** **Auto-Updating UI Modal**: Implemented a dynamic re-rendering hook in the portal's background polling loop, allowing the System Info modal to update its metrics live on screen every 5 seconds while open.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 

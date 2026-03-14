@@ -29,6 +29,7 @@ class Device(Base):
     ip_address = Column(String(45), nullable=False)
     registered_at = Column(DateTime, default=utcnow)
     last_seen = Column(DateTime, default=utcnow)
+    system_info = Column(Text, nullable=True)
 
     commands = relationship("Command", back_populates="device")
     admin_snapshots = relationship("AdminSnapshot", back_populates="device")

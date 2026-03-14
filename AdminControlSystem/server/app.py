@@ -93,6 +93,7 @@ def get_db():
 class RegisterRequest(BaseModel):
     hostname: str
     ip_address: str
+    system_info: Optional[dict] = None
 
 
 class SendCommandRequest(BaseModel):
@@ -114,15 +115,19 @@ class CommandResultRequest(BaseModel):
 @app.post("/register")
 def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new device or update last_seen for an existing one."""
+    sys_info_str = json.dumps(req.system_info) if req.system_info else None
+
     device = db.query(Device).filter(Device.hostname == req.hostname).first()
     if device:
         device.ip_address = req.ip_address
         device.last_seen = datetime.now(timezone.utc)
+        if sys_info_str:
+            device.system_info = sys_info_str
         db.commit()
         db.refresh(device)
         return {"message": "Device updated", "device_id": device.id}
 
-    device = Device(hostname=req.hostname, ip_address=req.ip_address)
+    device = Device(hostname=req.hostname, ip_address=req.ip_address, system_info=sys_info_str)
     db.add(device)
     db.commit()
     db.refresh(device)
@@ -133,6 +138,12 @@ def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
 def list_devices(db: Session = Depends(get_db)):
     """Return all registered devices."""
     devices = db.query(Device).order_by(Device.hostname).all()
+
+    def parse_sys_info(s):
+        if not s: return None
+        try: return json.loads(s)
+        except: return None
+
     return [
         {
             "id": d.id,
@@ -140,6 +151,7 @@ def list_devices(db: Session = Depends(get_db)):
             "ip_address": d.ip_address,
             "registered_at": d.registered_at.isoformat(timespec='milliseconds') + "Z" if d.registered_at else None,
             "last_seen": d.last_seen.isoformat(timespec='milliseconds') + "Z" if d.last_seen else None,
+            "system_info": parse_sys_info(d.system_info),
         }
         for d in devices
     ]
