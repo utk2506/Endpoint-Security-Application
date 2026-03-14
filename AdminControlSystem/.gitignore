@@ -2,3 +2,5 @@
 database.db
 AdminControlSystem/agent/*.log
 AdminControlSystem/agent/event_state.json
+__pycache__/
+*.pyc
