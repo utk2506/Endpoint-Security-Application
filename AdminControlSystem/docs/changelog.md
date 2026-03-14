@@ -103,6 +103,18 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Event Log Monitoring
+**Status**: Completed  
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14 14:30]** **EventLog Database Model**: New `event_logs` table with device_id, hostname, username, event_id, event_name, log_source, timestamp, message columns.
+- **[2026-03-14 14:30]** **Agent EventLogCollector**: Background collector using PowerShell `Get-WinEvent` to query 58 specific Event IDs from Security/System/Application logs every 60 seconds with incremental timestamps and batch POSTing.
+- **[2026-03-14 14:30]** **Server API Endpoints**: Three new endpoints — `POST /api/v1/device/logs`, `GET /api/v1/event-logs`, `GET /api/v1/event-logs/summary`.
+- **[2026-03-14 14:30]** **Portal UI Panel**: Event Log Monitor stats cards (Total Events, Logins, Logoffs, Crashes, Privilege Events) + Event Log History table with sortable columns, filters, and pagination.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 

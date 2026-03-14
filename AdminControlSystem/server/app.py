@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse  # type: ignore
 from pydantic import BaseModel  # type: ignore
 from sqlalchemy.orm import Session  # type: ignore
 
-from models import SessionLocal, Device, Command, AdminSnapshot  # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -327,6 +327,162 @@ def command_history(
         "page": page,
         "limit": limit,
         "commands": results
+    }
+
+
+# ── API: Event Log Monitoring ───────────────────────────────────────────────
+
+class EventLogEntry(BaseModel):
+    event_id: int
+    event_name: str
+    log_source: str
+    timestamp: str
+    username: Optional[str] = None
+    hostname: Optional[str] = None
+    message: Optional[str] = None
+
+class DeviceLogsPayload(BaseModel):
+    device_id: str
+    logs: list[EventLogEntry]
+
+@app.post("/api/v1/device/logs")
+def ingest_device_logs(payload: DeviceLogsPayload, db: Session = Depends(get_db)):
+    """Receive batched event logs from an agent."""
+    device = db.query(Device).filter(Device.id == payload.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    inserted = 0
+    for entry in payload.logs:
+        try:
+            ts = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
+        except Exception:
+            ts = datetime.now(timezone.utc)
+
+        log_row = EventLog(
+            device_id=payload.device_id,
+            hostname=entry.hostname or device.hostname,
+            username=entry.username,
+            event_id=entry.event_id,
+            event_name=entry.event_name,
+            log_source=entry.log_source,
+            timestamp=ts,
+            message=entry.message,
+        )
+        db.add(log_row)
+        inserted += 1
+
+    db.commit()
+    return {"status": "ok", "inserted": inserted}
+
+
+@app.get("/api/v1/event-logs")
+def get_event_logs(
+    page: int = 1,
+    limit: int = 20,
+    sort_by: str = "timestamp",
+    sort_dir: str = "desc",
+    device_id: Optional[str] = None,
+    log_source: Optional[str] = None,
+    event_id: Optional[int] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Return paginated, filterable, sortable event logs for the portal."""
+    query = db.query(EventLog)
+
+    if device_id:
+        query = query.filter(EventLog.device_id == device_id)
+    if log_source:
+        query = query.filter(EventLog.log_source == log_source)
+    if event_id:
+        query = query.filter(EventLog.event_id == event_id)
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            (EventLog.username.ilike(pattern)) |
+            (EventLog.message.ilike(pattern)) |
+            (EventLog.event_name.ilike(pattern))
+        )
+
+    total_count = query.count()
+
+    # Apply sorting
+    sort_col = getattr(EventLog, sort_by, None)
+    if sort_col is None:
+        sort_col = EventLog.timestamp
+    if sort_dir.lower() == 'asc':
+        query = query.order_by(sort_col.asc())
+    else:
+        query = query.order_by(sort_col.desc())
+
+    # Apply pagination
+    offset = (page - 1) * limit
+    logs = query.offset(offset).limit(limit).all()
+
+    results = []
+    for log_entry in logs:
+        device = db.query(Device).filter(Device.id == log_entry.device_id).first()
+        results.append({
+            "id": log_entry.id,
+            "device_id": log_entry.device_id,
+            "hostname": log_entry.hostname or (device.hostname if device else "Unknown"),
+            "username": log_entry.username,
+            "event_id": log_entry.event_id,
+            "event_name": log_entry.event_name,
+            "log_source": log_entry.log_source,
+            "timestamp": log_entry.timestamp.isoformat(timespec='milliseconds') + "Z" if log_entry.timestamp else None,
+            "message": log_entry.message,
+            "created_at": log_entry.created_at.isoformat(timespec='milliseconds') + "Z" if log_entry.created_at else None,
+        })
+
+    return {
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "logs": results
+    }
+
+
+@app.get("/api/v1/event-logs/summary")
+def get_event_log_summary(
+    device_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Return aggregated event log counts for dashboard stats cards."""
+    from sqlalchemy import func  # type: ignore
+
+    query = db.query(EventLog.event_name, func.count(EventLog.id).label("count"))
+
+    if device_id:
+        query = query.filter(EventLog.device_id == device_id)
+
+    rows = query.group_by(EventLog.event_name).all()
+
+    summary = {}
+    for event_name, count in rows:
+        summary[event_name] = count
+
+    # Calculate category totals
+    login_events = {
+        "login_success", "login_failed", "logon_explicit_creds",
+        "ntlm_auth", "kerberos_ticket_req", "kerberos_service_req", 
+        "kerberos_ticket_renew", "kerberos_preauth_failed"
+    }
+    logoff_events = {"logoff", "user_logoff"}
+    crash_events = {"app_crash", "app_hang", "error_reporting"}
+    privilege_events = {
+        "priv_use", "priv_service_op", "user_added_to_group", "user_added_to_priv_group",
+        "special_privs_assigned", "priv_service_call", "priv_obj_access", "special_groups_assigned"
+    }
+
+    return {
+        "total_events": sum(summary.values()),
+        "logins": sum(summary.get(e, 0) for e in login_events),
+        "logoffs": sum(summary.get(e, 0) for e in logoff_events),
+        "crashes": sum(summary.get(e, 0) for e in crash_events),
+        "privilege_events": sum(summary.get(e, 0) for e in privilege_events),
+        "by_event_name": summary
     }
 
 
