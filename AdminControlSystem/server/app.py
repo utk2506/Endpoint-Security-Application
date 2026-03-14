@@ -262,14 +262,51 @@ def get_admin_list(device_id: str, db: Session = Depends(get_db)):
 # ── API: Command History ────────────────────────────────────────────────────
 
 @app.get("/commands/history")
-def command_history(limit: int = 50, db: Session = Depends(get_db)):
-    """Return recent command history across all devices."""
-    cmds = (
-        db.query(Command)
-        .order_by(Command.created_at.desc())
-        .limit(limit)
-        .all()
-    )
+def command_history(
+    page: int = 1,
+    limit: int = 20,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    device_id: Optional[str] = None,
+    action: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """Return recent command history across devices, with filtering, pagination, and sorting."""
+    query = db.query(Command)
+
+    if device_id:
+        query = query.filter(Command.device_id == device_id)
+    if action:
+        query = query.filter(Command.action == action)
+    if status:
+        query = query.filter(Command.status == status)
+    if search:
+        search_pattern = f"%{search}%"
+        query = query.filter(
+            (Command.username.ilike(search_pattern)) |
+            (Command.result.ilike(search_pattern)) |
+            (Command.payload.ilike(search_pattern))
+        )
+
+    # Calculate total matching results before limit/offset
+    total_count = query.count()
+
+    # Apply sorting
+    sort_col = getattr(Command, sort_by, None)
+    if sort_col is None:
+        sort_col = Command.created_at
+        
+    if sort_dir.lower() == 'asc':
+        query = query.order_by(sort_col.asc())
+    else:
+        query = query.order_by(sort_col.desc())
+
+    # Apply pagination
+    offset = (page - 1) * limit
+    cmds = query.offset(offset).limit(limit).all()
+
     results = []
     for c in cmds:
         device = db.query(Device).filter(Device.id == c.device_id).first()
@@ -284,7 +321,13 @@ def command_history(limit: int = 50, db: Session = Depends(get_db)):
             "created_at": c.created_at.isoformat(timespec='milliseconds') + "Z" if c.created_at else None,
             "executed_at": c.executed_at.isoformat(timespec='milliseconds') + "Z" if c.executed_at else None,
         })
-    return results
+        
+    return {
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "commands": results
+    }
 
 
 # ── Serve Portal Static Files ───────────────────────────────────────────────

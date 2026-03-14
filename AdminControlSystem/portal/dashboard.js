@@ -78,8 +78,14 @@ async function loadDevices() {
         setConnected(true);
 
         const select = $('deviceSelect');
+        const filterSelect = $('filterDevice');
         const currentVal = select.value;
+        const currentFilterVal = filterSelect ? filterSelect.value : '';
+        
         select.innerHTML = '<option value="">— Select a device —</option>';
+        if (filterSelect) {
+            filterSelect.innerHTML = '<option value="">All Devices</option>';
+        }
 
         const now = new Date();
         devices.forEach(d => {
@@ -91,10 +97,18 @@ async function loadDevices() {
             opt.value = d.id;
             opt.textContent = `${statusIcon} ${d.hostname}  (${d.ip_address})`;
             select.appendChild(opt);
+
+            if (filterSelect) {
+                const fOpt = document.createElement('option');
+                fOpt.value = d.id;
+                fOpt.textContent = `${d.hostname} (${d.ip_address})`;
+                filterSelect.appendChild(fOpt);
+            }
         });
 
         // Restore selection
         if (currentVal) select.value = currentVal;
+        if (currentFilterVal && filterSelect) filterSelect.value = currentFilterVal;
 
         $('statDevices').textContent = devices.length;
     } catch {
@@ -103,6 +117,8 @@ async function loadDevices() {
 }
 
 // ── Device selection ───────────────────────────────────────────────────────
+// (...) unchanged code up to Command History
+
 
 $('deviceSelect')?.addEventListener('change', function () {
     selectedDeviceId = this.value ? this.value : null;
@@ -417,21 +433,128 @@ function quickRevoke(username) {
 
 // ── Command History ────────────────────────────────────────────────────────
 
+let currentHistoryPage = 1;
+let historyLimit = 20;
+let sortColumn = 'created_at';
+let sortDirection = 'desc';
+
+function changeLimit() {
+    const selector = $('limitSelect');
+    if (selector) {
+        historyLimit = parseInt(selector.value, 10) || 20;
+    }
+    currentHistoryPage = 1;
+    loadHistory();
+}
+
+function jumpToPage() {
+    const input = $('pageJumpInput');
+    if (input) {
+        let desired = parseInt(input.value, 10);
+        if (isNaN(desired) || desired < 1) desired = 1;
+        // The max value check is handled gracefully by the backend offset logic, but we can set it here too if we want
+        currentHistoryPage = desired;
+        loadHistory();
+    }
+}
+
+function sortBy(col) {
+    if (sortColumn === col) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+    } else {
+        sortColumn = col;
+        sortDirection = 'asc'; // default to asc when switching columns
+    }
+    loadHistory();
+}
+
+function applyFilters() {
+    currentHistoryPage = 1; // reset page on new filter
+    loadHistory();
+}
+
+function clearFilters() {
+    if ($('filterDevice')) $('filterDevice').value = '';
+    if ($('filterAction')) $('filterAction').value = '';
+    if ($('filterStatus')) $('filterStatus').value = '';
+    if ($('filterSearch')) $('filterSearch').value = '';
+    currentHistoryPage = 1;
+    loadHistory();
+}
+
+function changePage(delta) {
+    currentHistoryPage += delta;
+    if (currentHistoryPage < 1) currentHistoryPage = 1;
+    loadHistory();
+}
+
 async function loadHistory() {
     try {
-        const history = await api('GET', '/commands/history?limit=25');
+        let url = `/commands/history?limit=${historyLimit}&page=${currentHistoryPage}&sort_by=${encodeURIComponent(sortColumn)}&sort_dir=${encodeURIComponent(sortDirection)}`;
+        
+        const device = $('filterDevice')?.value;
+        const action = $('filterAction')?.value;
+        const status = $('filterStatus')?.value;
+        const search = $('filterSearch')?.value;
+        
+        if (device) url += `&device_id=${encodeURIComponent(device)}`;
+        if (action) url += `&action=${encodeURIComponent(action)}`;
+        if (status) url += `&status=${encodeURIComponent(status)}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+
+        const data = await api('GET', url);
+        const history = data.commands || [];
+        const total = data.total || 0;
+        const page = data.page || 1;
+        const limit = data.limit || 20;
+
         const tbody = $('historyTableBody');
 
         if (history.length === 0) {
             tbody.innerHTML = `<tr><td colspan="7">
-                <div class="empty-state"><span class="icon">📭</span>No commands yet</div>
+                <div class="empty-state"><span class="icon">📭</span>No commands found</div>
             </td></tr>`;
             $('statCommands').textContent = '0';
+            // Update Pagination UI
+            if ($('pageInfoText')) $('pageInfoText').textContent = '0 results';
+            if ($('pageIndicator')) $('pageIndicator').textContent = '1';
+            if ($('btnPrevPage')) $('btnPrevPage').disabled = true;
+            if ($('btnNextPage')) $('btnNextPage').disabled = true;
             return;
         }
 
         const completedCount = history.filter(c => c.status === 'completed').length;
-        $('statCommands').textContent = completedCount;
+        $('statCommands').textContent = completedCount; // NOTE: This is now just the count on THIS page
+
+        // Update Pagination UI
+        const totalPages = Math.ceil(total / limit) || 1;
+        if ($('pageInfoText')) {
+            const startIdx = total === 0 ? 0 : ((page - 1) * limit) + 1;
+            const endIdx = Math.min(page * limit, total);
+            $('pageInfoText').textContent = `${startIdx}-${endIdx} of ${total} results`;
+        }
+        if ($('totalPagesSpan')) $('totalPagesSpan').textContent = totalPages;
+        if ($('pageJumpInput')) {
+            $('pageJumpInput').max = totalPages;
+            $('pageJumpInput').value = page;
+        }
+        if ($('btnPrevPage')) $('btnPrevPage').disabled = (page <= 1);
+        if ($('btnNextPage')) $('btnNextPage').disabled = (page >= totalPages);
+
+        // Update Sort Icons
+        const columns = ['id', 'device_hostname', 'action', 'username', 'status', 'result', 'created_at'];
+        for (const c of columns) {
+            const el = $(`sort-idx-${c}`);
+            if (el) {
+                if (c === sortColumn) {
+                    el.textContent = sortDirection === 'asc' ? '▲' : '▼';
+                    el.style.color = 'var(--accent)';
+                } else {
+                    el.textContent = '';
+                    el.style.color = '';
+                }
+            }
+        }
 
         tbody.innerHTML = history.map(c => {
             const actionIcons = { grant: '✅', revoke: '🚫', check: '🔍', shell: '💻' };
