@@ -82,11 +82,9 @@ async function loadDevices() {
         const select = $('deviceSelect');
         const filterSelect = $('filterDevice');
         const evtFilterSelect = $('evtFilterDevice');
-        const notifySelect = $('notifyDeviceSelect');
         const currentVal = select.value;
         const currentFilterVal = filterSelect ? filterSelect.value : '';
         const currentEvtFilterVal = evtFilterSelect ? evtFilterSelect.value : '';
-        const currentNotifyVal = notifySelect ? notifySelect.value : '';
         
         select.innerHTML = '<option value="">— Select a device —</option>';
         if (filterSelect) {
@@ -94,9 +92,6 @@ async function loadDevices() {
         }
         if (evtFilterSelect) {
             evtFilterSelect.innerHTML = '<option value="">All Devices</option>';
-        }
-        if (notifySelect) {
-            notifySelect.innerHTML = '<option value="">— Select a device —</option>';
         }
 
         const now = new Date();
@@ -123,20 +118,42 @@ async function loadDevices() {
                 eOpt.textContent = `${d.hostname} (${d.ip_address})`;
                 evtFilterSelect.appendChild(eOpt);
             }
-
-            if (notifySelect) {
-                const nOpt = document.createElement('option');
-                nOpt.value = d.id;
-                nOpt.textContent = `${statusIcon} ${d.hostname} (${d.ip_address})`;
-                notifySelect.appendChild(nOpt);
-            }
         });
+
+        // Rebuild notify device list checkboxes
+        const notifyList = $('notifyDeviceList');
+        if (notifyList) {
+            // Keep track of what was checked previously, default to checked all if empty
+            const existingCheckboxes = Array.from(document.querySelectorAll('.notify-target-device:checked')).map(c => c.value);
+            const isFirstLoad = document.querySelectorAll('.notify-target-device').length === 0;
+
+            let html = `
+                <label style="display:flex; align-items:center; gap:8px; font-weight:bold; margin-bottom:6px;">
+                    <input type="checkbox" id="notifyTargetAllDevices" value="All" ${isFirstLoad ? 'checked' : ''} onchange="document.querySelectorAll('.notify-target-device').forEach(c => c.checked = this.checked); loadNotifyCampaigns();">
+                    Target All Devices
+                </label>
+                <div style="margin-top:8px; padding-left: 24px;">
+            `;
+            devices.forEach(d => {
+                const lastSeen = new Date(d.last_seen);
+                const isOnline = (now - lastSeen) < 15000;
+                const statusIcon = isOnline ? '🟢' : '🔴';
+                const isChecked = isFirstLoad || existingCheckboxes.includes(d.id.toString());
+                html += `
+                    <label style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px;">
+                        <input type="checkbox" class="notify-target-device" value="${d.id}" ${isChecked ? 'checked' : ''} onchange="loadNotifyCampaigns();">
+                        ${statusIcon} ${d.hostname} (${d.ip_address})
+                    </label>
+                `;
+            });
+            html += '</div>';
+            notifyList.innerHTML = html;
+        }
 
         // Restore selection
         if (currentVal) select.value = currentVal;
         if (currentFilterVal && filterSelect) filterSelect.value = currentFilterVal;
         if (currentEvtFilterVal && evtFilterSelect) evtFilterSelect.value = currentEvtFilterVal;
-        if (currentNotifyVal && notifySelect) notifySelect.value = currentNotifyVal;
 
         $('statDevices').textContent = devices.length;
 
@@ -370,62 +387,16 @@ function toggleNotifySchedule() {
     $('notifyRecurringOptions').style.display = isRecurring ? 'block' : 'none';
 }
 
-async function loadNotifyUsers() {
-    if (!selectedDeviceId) return;
-    
-    // We can fetch the admin list just to populate the user checkboxes
-    // Or we could wait for the next check/grant. For now, we'll hit admin_list.
-    try {
-        const resp = await api('GET', `/admin_list/${selectedDeviceId}`);
-        // But what if we want ALL users? We implemented Get-LocalUser in 'check' response?
-        // Wait, 'check' response returns ONLY Administrators.
-        // In Phase 8, we added `RefreshLocalUsers` to the agent, which sends full local user list.
-        // Where does it save it? The backend didn't save the full user list to the DB.
-        // Let's fallback to asking the admin to type it, or for now, just provide "All" and let them type.
-    } catch (e) {
-        console.warn(e);
-    }
-}
-
-// Actually, in Phase 10 we need dynamically built checkboxes. The easiest way without adding a new API is to just provide 'All Users' by default, and a custom text box.
-// Let's build that list UI manually.
-function buildNotifyUsersList(users) {
-    const list = $('notifyUsersList');
-    list.innerHTML = `
-        <label style="display:flex; align-items:center; gap:8px; font-weight:bold; margin-bottom:6px;">
-            <input type="checkbox" id="notifyTargetAll" value="All" checked onchange="toggleNotifyCustomTarget()">
-            All Logged-in Users
-        </label>
-        <div id="notifyCustomTargetWrap" style="display:none; margin-top:8px;">
-            <label style="font-size:12px; color:var(--text-secondary);">Or type specific usernames (comma separated)</label>
-            <input type="text" id="notifyTargetCustom" placeholder="e.g. rahul, admin">
-        </div>
-    `;
-}
-// Run it on load
-buildNotifyUsersList();
-
-window.toggleNotifyCustomTarget = function() {
-    const wantAll = $('notifyTargetAll').checked;
-    $('notifyCustomTargetWrap').style.display = wantAll ? 'none' : 'block';
-};
-
 async function sendNotification() {
-    const notifyDeviceId = $('notifyDeviceSelect').value;
-    if (!notifyDeviceId) { toast('Select a target device first', 'error'); return; }
+    const notifyCheckboxes = document.querySelectorAll('.notify-target-device:checked');
+    const notifyDeviceIds = Array.from(notifyCheckboxes).map(c => c.value);
+
+    if (notifyDeviceIds.length === 0) { toast('Select at least one target device', 'error'); return; }
 
     const message = $('notifyMessage').value.trim();
     if (!message) { toast('Enter a message', 'error'); return; }
 
-    const wantAll = $('notifyTargetAll').checked;
-    let targetUsers = [];
-    if (wantAll) {
-        targetUsers = ['All'];
-    } else {
-        const custom = $('notifyTargetCustom').value.split(',').map(s => s.trim()).filter(Boolean);
-        if (!custom.length) { toast('Enter at least one target user', 'error'); return; }
-        targetUsers = custom;
-    }
+    const targetUsers = ['All'];
 
     const isRecurring = $('notifyScheduleType').value === 'recurring';
     const stInput = $('notifyStartTime').value;
@@ -433,7 +404,7 @@ async function sendNotification() {
     const interval = parseInt($('notifyInterval').value, 10);
 
     const payload = {
-        device_id: notifyDeviceId,
+        device_ids: notifyDeviceIds,
         message,
         target_users: targetUsers,
         is_recurring: isRecurring
@@ -463,23 +434,48 @@ async function sendNotification() {
 }
 
 async function loadNotifyCampaigns() {
-    const notifyDeviceId = $('notifyDeviceSelect') ? $('notifyDeviceSelect').value : selectedDeviceId;
-    if (!notifyDeviceId) return;
+    let checkedDevices = Array.from(document.querySelectorAll('.notify-target-device:checked')).map(c => c.value);
+    const tbody = $('notifyCampaignsBody');
+    if (!tbody) return;
+
+    // If nothing checked, show all for convenience or "No active" message
+    if (checkedDevices.length === 0 && _deviceCache && _deviceCache.length > 0) {
+        checkedDevices = _deviceCache.map(d => d.id.toString());
+    }
+
+    if (checkedDevices.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state" style="padding:15px; font-size:12px;">No active devices found.</div></td></tr>`;
+        return;
+    }
+
     try {
-        const resp = await api('GET', `/api/v1/notifications/${notifyDeviceId}`);
-        const tbody = $('notifyCampaignsBody');
-        tbody.innerHTML = '';
+        let allCampaigns = [];
+        for (const devId of checkedDevices) {
+            try {
+                const resp = await api('GET', `/api/v1/notifications/${devId}`);
+                if (resp && resp.campaigns) {
+                    const devObj = _deviceCache.find(d => d.id == devId);
+                    const hostname = devObj ? devObj.hostname : devId;
+                    resp.campaigns.forEach(c => { c.target_hostname = hostname; });
+                    allCampaigns = allCampaigns.concat(resp.campaigns);
+                }
+            } catch (innerErr) {
+                console.warn(`Failed to fetch for ${devId}`, innerErr);
+            }
+        }
         
-        if (!resp.campaigns || resp.campaigns.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state" style="padding:15px; font-size:12px;">No active campaigns.</div></td></tr>`;
+        tbody.innerHTML = '';
+        if (allCampaigns.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state" style="padding:15px; font-size:12px;">No active campaigns found.</div></td></tr>`;
             return;
         }
 
-        for (const c of resp.campaigns) {
+        for (const c of allCampaigns) {
             const tr = document.createElement('tr');
             tr.innerHTML = `
-                <td>${escapeHTML(c.message)}</td>
-                <td><span class="badge badge-info">${escapeHTML(c.target_users.join(', '))}</span></td>
+                <td>${escapeHtml(c.target_hostname)}</td>
+                <td>${escapeHtml(c.message)}</td>
+                <td><span class="badge badge-info">${escapeHtml(c.target_users.join(', '))}</span></td>
                 <td>Every ${c.interval_minutes}m</td>
                 <td>${formatDate(c.end_time)}</td>
                 <td>
@@ -488,7 +484,10 @@ async function loadNotifyCampaigns() {
             `;
             tbody.appendChild(tr);
         }
-    } catch(e) { console.warn(e); }
+    } catch(e) { 
+        console.error("loadNotifyCampaigns failed", e);
+        tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state" style="padding:15px; font-size:12px; color:var(--danger);">Error loading campaigns.</div></td></tr>`;
+    }
 }
 
 async function cancelNotifyCampaign(id) {
@@ -804,6 +803,7 @@ async function loadHistory() {
 
         const data = await api('GET', url);
         const history = data.commands || [];
+        _historyCache = history; // Cache for details modal
         const total = data.total || 0;
         const page = data.page || 1;
         const limit = data.limit || 20;
@@ -857,8 +857,26 @@ async function loadHistory() {
         }
 
         tbody.innerHTML = history.map(c => {
-            const actionIcons = { grant: '✅', revoke: '🚫', check: '🔍', shell: '💻' };
+            const actionIcons = { grant: '✅', revoke: '🚫', check: '🔍', shell: '💻', create_user: '👤', notify: '📢' };
             const statusClass = `badge-${c.status}`;
+            
+            let actionText = c.action;
+            if (c.action === 'grant') {
+                if (c.expires_at) {
+                    const created = new Date(c.created_at);
+                    const expires = new Date(c.expires_at);
+                    const diffMins = Math.round((expires - created) / 60000);
+                    actionText = `grant (${diffMins}m)`;
+                } else {
+                    actionText = 'grant (Permanent)';
+                }
+            }
+
+            let resultHtml = escapeHtml(c.result || '—');
+            if (c.action === 'revoke' && c.payload === 'System Auto-Revoke') {
+                resultHtml = `<span class="badge badge-warning" style="font-size:10px;">⚡ SYSTEM AUTO-REVOKE</span>`;
+            }
+
             let timeStr = c.created_at;
             if (timeStr && !timeStr.endsWith('Z')) timeStr += 'Z';
             const time = formatDate(timeStr);
@@ -914,20 +932,42 @@ async function loadHistory() {
             return `<tr>
                 <td style="font-weight:600; color:var(--text-primary)">#${c.id}</td>
                 <td>${escapeHtml(c.device_hostname)}</td>
-                <td>
-                    <span style="display:flex; align-items:center;">${actionIcons[c.action] || '⚙️'} <span style="text-transform:capitalize; margin-left:4px;">${c.action.replace('_', ' ')}</span></span>
+                <td onclick="openCmdDetailsModal(${c.id})" style="cursor:pointer;" title="Click for details">
+                    <span style="display:flex; align-items:center;">${actionIcons[c.action] || '⚙️'} <span style="text-transform:capitalize; margin-left:4px;">${actionText}</span></span>
                     <div style="margin-top:2px;">${payloadBadge}${expiryBadge}</div>
                 </td>
                 <td>${c.username ? escapeHtml(c.username) : '—'}</td>
                 <td><span class="badge ${statusClass}"><span class="badge-dot"></span>${c.status}</span></td>
-                <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
-                    title="${c.result ? escapeAttr(c.result) : ''}">${c.result ? escapeHtml(c.result) : '—'}</td>
+                <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer;"
+                    onclick="openCmdDetailsModal(${c.id})"
+                    title="${c.result ? escapeAttr(c.result) : 'Click for details'}">${resultHtml}</td>
+
                 <td style="color:var(--text-muted); font-size:12px;">${time}</td>
             </tr>`;
         }).join('');
     } catch {
         // silent
     }
+}
+
+function openCmdDetailsModal(cmdId) {
+    const cmd = _historyCache.find(c => c.id === cmdId);
+    if (!cmd) return;
+
+    if ($('cmdModalId')) $('cmdModalId').textContent = `#${cmd.id}`;
+    if ($('cmdModalDevice')) $('cmdModalDevice').textContent = `${cmd.device_hostname || 'Unknown'} (${cmd.device_id})`;
+    if ($('cmdModalAction')) $('cmdModalAction').textContent = cmd.action.replace('_', ' ');
+    if ($('cmdModalTarget')) $('cmdModalTarget').textContent = cmd.username || '—';
+    if ($('cmdModalTime')) $('cmdModalTime').textContent = formatDate(cmd.created_at);
+    if ($('cmdModalPayload')) $('cmdModalPayload').textContent = cmd.payload || 'None';
+    if ($('cmdModalResult')) $('cmdModalResult').textContent = cmd.result || 'No result yet';
+
+    $('cmdDetailsModal').classList.add('show');
+}
+
+function closeCmdDetailsModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    $('cmdDetailsModal').classList.remove('show');
 }
 
 // ── Event Log Monitor ──────────────────────────────────────────────────────
@@ -1297,6 +1337,7 @@ async function pollAll() {
     await loadHistory();
     await loadEventLogs();
     await loadEventLogSummary();
+    await loadNotifyCampaigns();
     if (selectedDeviceId) await refreshAdminList();
 }
 
