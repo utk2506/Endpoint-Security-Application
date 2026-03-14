@@ -688,12 +688,12 @@ def main():
         log('DRY-RUN', "Skipping event log collection in dry-run mode.")
 
     # ── Start System Info Refresh Background Thread ───────────────────
-    SYS_INFO_INTERVAL = 600  # refresh system info every 10 minutes
+    SYS_INFO_INTERVAL = 10  # refresh system info every 10 seconds for real-time monitoring
 
     def sys_info_refresh_loop():
         while True:
             time.sleep(SYS_INFO_INTERVAL)
-            log('INFO', '🔄 Refreshing system information…')
+            # Fetching silently in background
             fresh_info = collect_system_info()
             api_call(server, 'POST', '/register', {
                 'hostname': hostname,
