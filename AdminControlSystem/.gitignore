@@ -1,2 +1,4 @@
 *.db
 database.db
+AdminControlSystem/agent/*.log
+AdminControlSystem/agent/event_state.json
