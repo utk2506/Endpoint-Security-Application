@@ -5,10 +5,10 @@ Uses SQLAlchemy ORM with SQLite.
 
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import (
+from sqlalchemy import (  # type: ignore
     Column, Integer, String, DateTime, Text, ForeignKey, create_engine
 )
-from sqlalchemy.orm import declarative_base, sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore
 
 DATABASE_URL = "sqlite:///database.db"
 
@@ -32,6 +32,7 @@ class Device(Base):
 
     commands = relationship("Command", back_populates="device")
     admin_snapshots = relationship("AdminSnapshot", back_populates="device")
+    event_logs = relationship("EventLog", back_populates="device")
 
     def __repr__(self):
         return f"<Device(id={self.id}, hostname='{self.hostname}')>"
@@ -68,6 +69,26 @@ class AdminSnapshot(Base):
 
     def __repr__(self):
         return f"<AdminSnapshot(id={self.id}, device_id={self.device_id})>"
+
+
+class EventLog(Base):
+    __tablename__ = "event_logs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False)
+    hostname = Column(String(255), nullable=True)
+    username = Column(String(255), nullable=True)
+    event_id = Column(Integer, nullable=False, index=True)
+    event_name = Column(String(100), nullable=False)
+    log_source = Column(String(50), nullable=False)    # Security / System / Application
+    timestamp = Column(DateTime, nullable=False, index=True)
+    message = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    device = relationship("Device", back_populates="event_logs")
+
+    def __repr__(self):
+        return f"<EventLog(id={self.id}, event_id={self.event_id}, event_name='{self.event_name}')>"
 
 
 # Create all tables on import
