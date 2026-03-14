@@ -693,6 +693,34 @@
         </div>
     </div>
 
+    <!-- Command Details Modal -->
+    <div class="modal-overlay" id="cmdDetailsModal" onclick="closeCmdDetailsModal(event)">
+        <div class="terminal-modal" style="width: 70vw; height: auto; max-height: 80vh;" onclick="event.stopPropagation()">
+            <div class="terminal-header">
+                <div class="terminal-title"><span class="icon">🔍</span> Command Details</div>
+                <button class="close-btn" onclick="closeCmdDetailsModal()">&times;</button>
+            </div>
+            <div class="terminal-body" style="overflow-y: auto; padding: 20px; background: var(--bg-tertiary);">
+                <div style="display: grid; grid-template-columns: 100px 1fr; gap: 8px; margin-bottom: 16px; font-size: 13px;">
+                    <strong style="color: var(--text-secondary);">Command ID:</strong> <span id="cmdModalId" style="color: var(--text-primary); font-weight: 600;"></span>
+                    <strong style="color: var(--text-secondary);">Device:</strong> <span id="cmdModalDevice"></span>
+                    <strong style="color: var(--text-secondary);">Action:</strong> <span id="cmdModalAction" style="text-transform: capitalize;"></span>
+                    <strong style="color: var(--text-secondary);">Target:</strong> <span id="cmdModalTarget"></span>
+                    <strong style="color: var(--text-secondary);">Timestamp:</strong> <span id="cmdModalTime"></span>
+                </div>
+                <hr style="border: 0; border-top: 1px solid var(--border); margin: 16px 0;">
+                <div style="margin-bottom: 16px;">
+                    <strong style="display:block; color:var(--text-secondary); margin-bottom:4px; font-size:12px;">Payload / Script:</strong>
+                    <div id="cmdModalPayload" style="font-size: 13px; color: var(--text-primary); font-family: 'Courier New', Courier, monospace; white-space: pre-wrap; word-break: break-word; line-height: 1.5; background: #000; padding:12px; border-radius:4px; border:1px solid var(--border);"></div>
+                </div>
+                <div>
+                    <strong style="display:block; color:var(--text-secondary); margin-bottom:4px; font-size:12px;">Result:</strong>
+                    <div id="cmdModalResult" style="font-size: 13px; color: var(--accent-light); font-family: 'Courier New', Courier, monospace; white-space: pre-wrap; word-break: break-word; line-height: 1.5; background: #000; padding:12px; border-radius:4px; border:1px solid var(--border);"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Event Log Details Modal -->
     <div class="modal-overlay" id="logDetailsModal">
         <div class="terminal-modal" style="width: 70vw; height: auto; max-height: 80vh;">
@@ -729,6 +757,29 @@
             </div>
         </div>
     </div>
+
+    <!-- Create User Modal -->
+    <div class="modal-overlay" id="createUserModal" onclick="closeCreateUserModal(event)">
+        <div class="shell-modal" style="max-width:400px; padding:24px;" onclick="event.stopPropagation()">
+            <div class="card-title"><span class="icon">👤</span> Create New Local User</div>
+            <p style="color:var(--text-secondary); font-size:12px; margin-bottom:16px;">
+                This will create a brand new <b>Standard User</b> account on the remote device.
+            </p>
+            <div style="margin-bottom:12px;">
+                <label>Username</label>
+                <input type="text" id="newUserName" placeholder="e.g. TestUser" style="background:var(--surface);">
+            </div>
+            <div style="margin-bottom:20px;">
+                <label>Password</label>
+                <input type="password" id="newUserPass" placeholder="••••••••" style="background:var(--surface);">
+            </div>
+            <div class="btn-group">
+                <button class="btn btn-primary" onclick="submitCreateUser()">Create User</button>
+                <button class="btn btn-outline" onclick="closeCreateUserModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+
     <div class="toast-container" id="toastContainer"></div>
 
     <div class="app-wrapper">
@@ -880,23 +931,17 @@
                 <!-- Left side: Device, Message & Target -->
                 <div>
                     <div style="margin-bottom: 16px;">
-                        <label for="notifyDeviceSelect">Target Device</label>
-                        <select id="notifyDeviceSelect" onchange="loadNotifyCampaigns()">
-                            <option value="">— Select a device —</option>
-                        </select>
+                        <label>Target Devices</label>
+                        <div id="notifyDeviceList" style="background:var(--bg-tertiary); max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:8px;">
+                            <!-- Built by JS dynamically -->
+                        </div>
                     </div>
-
+                    
                     <div style="margin-bottom: 16px;">
                         <label for="notifyMessage">Message to Display</label>
                         <textarea id="notifyMessage" rows="3" placeholder="e.g. Please save your work, IT will reboot this machine in 15 minutes." style="resize:vertical;"></textarea>
                     </div>
                     
-                    <div style="margin-bottom: 16px;">
-                        <label>Target Users on Device</label>
-                        <div id="notifyUsersList" style="background:var(--bg-tertiary); max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:8px;">
-                            <!-- Built by JS on page load -->
-                        </div>
-                    </div>
                 </div>
 
                 <!-- Right side: Scheduling -->
@@ -937,6 +982,7 @@
                     <table>
                         <thead>
                             <tr>
+                                <th>Device</th>
                                 <th>Message</th>
                                 <th>Targets</th>
                                 <th>Interval</th>
@@ -946,7 +992,7 @@
                         </thead>
                         <tbody id="notifyCampaignsBody">
                             <tr>
-                                <td colspan="5">
+                                <td colspan="6">
                                     <div class="empty-state" style="padding:15px; font-size:12px;">No active campaigns.</div>
                                 </td>
                             </tr>
@@ -954,6 +1000,7 @@
                     </table>
                 </div>
             </div>
+
         </div>
 
         <!-- Command History -->

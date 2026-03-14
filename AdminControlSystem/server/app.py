@@ -520,7 +520,7 @@ def get_event_log_summary(
 # ── API: Scheduled Notifications ───────────────────────────────────────────
 
 class NotificationCreateRequest(BaseModel):
-    device_id: str
+    device_ids: list[str]
     message: str
     target_users: list[str]
     is_recurring: bool
@@ -530,25 +530,26 @@ class NotificationCreateRequest(BaseModel):
 
 @app.post("/api/v1/notifications")
 def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db)):
-    """Create a new notification (one-off or recurring)."""
-    device = db.query(Device).filter(Device.id == req.device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+    """Create a new notification (one-off or recurring) for multiple devices."""
+    devices = db.query(Device).filter(Device.id.in_(req.device_ids)).all()
+    if not devices:
+        raise HTTPException(status_code=404, detail="No matching devices found")
 
     if not req.is_recurring:
-        # One-off: Just queue a command immediately
-        cmd = Command(
-            device_id=req.device_id,
-            action="notify",
-            username="system",
-            payload=json.dumps({
-                "message": req.message,
-                "target_users": req.target_users
-            })
-        )
-        db.add(cmd)
+        # One-off: Just queue a command immediately for each
+        for d in devices:
+            cmd = Command(
+                device_id=d.id,
+                action="notify",
+                username="system",
+                payload=json.dumps({
+                    "message": req.message,
+                    "target_users": req.target_users
+                })
+            )
+            db.add(cmd)
         db.commit()
-        return {"message": "One-off notification queued."}
+        return {"message": f"One-off notification queued for {len(devices)} devices."}
     
     # Recurring campaign
     if not req.start_time or not req.end_time or not req.interval_minutes:
@@ -560,19 +561,22 @@ def create_notification(req: NotificationCreateRequest, db: Session = Depends(ge
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO-8601")
 
-    camp = NotificationCampaign(
-        device_id=req.device_id,
-        message=req.message,
-        target_users=json.dumps(req.target_users),
-        start_time=st,
-        end_time=et,
-        interval_minutes=req.interval_minutes,
-        is_active=True
-    )
-    db.add(camp)
+    created = 0
+    for d in devices:
+        camp = NotificationCampaign(
+            device_id=d.id,
+            message=req.message,
+            target_users=json.dumps(req.target_users),
+            start_time=st,
+            end_time=et,
+            interval_minutes=req.interval_minutes,
+            is_active=True
+        )
+        db.add(camp)
+        created += 1
+
     db.commit()
-    db.refresh(camp)
-    return {"message": "Recurring campaign created", "campaign_id": camp.id}
+    return {"message": f"Recurring campaign created for {created} devices"}
 
 @app.get("/api/v1/notifications/{device_id}")
 def get_notifications(device_id: str, db: Session = Depends(get_db)):
@@ -645,9 +649,63 @@ def _auto_revoke_loop():
             db.close()
 
 
-# Start the auto-revoke watcher in background when the module loads
+# Start the background threads when the module loads
 _revoke_thread = threading.Thread(target=_auto_revoke_loop, daemon=True)
 _revoke_thread.start()
+
+def _notification_scheduler_loop():
+    """Runs every 30 seconds; fires pending notifications."""
+    import time as _time
+    from datetime import timedelta
+    while True:
+        _time.sleep(30)
+        try:
+            db = SessionLocal()
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            active_camps = db.query(NotificationCampaign).filter(
+                NotificationCampaign.is_active == True,
+                NotificationCampaign.start_time <= now_utc,
+                NotificationCampaign.end_time >= now_utc
+            ).all()
+
+            for camp in active_camps:
+                should_fire = False
+                if not camp.last_sent:
+                    should_fire = True
+                else:
+                    elapsed_mins = (now_utc - camp.last_sent).total_seconds() / 60.0
+                    if elapsed_mins >= camp.interval_minutes:
+                        should_fire = True
+
+                if should_fire:
+                    cmd = Command(
+                        device_id=camp.device_id,
+                        action="notify",
+                        username="system",
+                        payload=json.dumps({
+                            "message": camp.message,
+                            "target_users": json.loads(camp.target_users)
+                        })
+                    )
+                    db.add(cmd)
+                    camp.last_sent = now_utc
+
+            # Handle expiry cleanup
+            expired_camps = db.query(NotificationCampaign).filter(
+                NotificationCampaign.is_active == True,
+                NotificationCampaign.end_time < now_utc
+            ).all()
+            for EC in expired_camps:
+                EC.is_active = False
+
+            db.commit()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+_notify_thread = threading.Thread(target=_notification_scheduler_loop, daemon=True)
+_notify_thread.start()
 
 
 
