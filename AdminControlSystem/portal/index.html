@@ -851,6 +851,86 @@
             </div>
         </div>
 
+        <!-- Remote Notifications -->
+        <div class="card full-width" id="notifyPanel">
+            <div class="card-title"><span class="icon">📢</span> Remote User Notifications</div>
+            <p style="color:var(--text-secondary); font-size:13px; margin-bottom:14px;">
+                Send Windows pop-up messages to users logged into the selected device. Schedule recurring pop-ups to ensure visibility.
+            </p>
+            
+            <div class="grid-2">
+                <!-- Left side: Message & Target -->
+                <div>
+                    <div style="margin-bottom: 16px;">
+                        <label for="notifyMessage">Message to Display</label>
+                        <textarea id="notifyMessage" rows="3" placeholder="e.g. Please save your work, IT will reboot this machine in 15 minutes." style="resize:vertical;"></textarea>
+                    </div>
+                    
+                    <div style="margin-bottom: 16px;">
+                        <label>Target Users</label>
+                        <div id="notifyUsersList" style="background:var(--bg-tertiary); max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:8px;">
+                            <div class="empty-state" style="padding:10px 0; font-size:12px;">Select a device to load users...</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Right side: Scheduling -->
+                <div>
+                    <div style="margin-bottom: 16px;">
+                        <label>Schedule Type</label>
+                        <select id="notifyScheduleType" onchange="toggleNotifySchedule()">
+                            <option value="once">Send Once Immediately</option>
+                            <option value="recurring">Recurring Campaign (Spam)</option>
+                        </select>
+                    </div>
+
+                    <div id="notifyRecurringOptions" style="display:none; background:var(--bg-tertiary); border:1px solid var(--border); border-radius:4px; padding:12px; margin-bottom:16px;">
+                        <div style="margin-bottom:12px;">
+                            <label for="notifyStartTime">Start Time (Optional - defaults to now)</label>
+                            <input type="datetime-local" id="notifyStartTime">
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label for="notifyEndTime">End Time (Required)</label>
+                            <input type="datetime-local" id="notifyEndTime">
+                        </div>
+                        <div>
+                            <label for="notifyInterval">Repeat Every (Minutes)</label>
+                            <input type="number" id="notifyInterval" min="1" value="5" style="width:100px;">
+                        </div>
+                    </div>
+
+                    <div class="btn-group">
+                        <button class="btn btn-primary" onclick="sendNotification()">🚀 Send Notification / Start Campaign</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Campaigns Table -->
+            <div style="margin-top:20px; border-top:1px solid var(--border); padding-top:16px;">
+                <div style="font-weight:600; margin-bottom:10px; font-size:14px; color:var(--text-primary);">Active Recurring Campaigns</div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Message</th>
+                                <th>Targets</th>
+                                <th>Interval</th>
+                                <th>Ends At</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="notifyCampaignsBody">
+                            <tr>
+                                <td colspan="5">
+                                    <div class="empty-state" style="padding:15px; font-size:12px;">No active campaigns.</div>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- Command History -->
         <div class="card full-width">
             <div class="card-title"><span class="icon">📜</span> Command History</div>

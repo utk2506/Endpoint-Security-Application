@@ -498,6 +498,95 @@ def get_event_log_summary(
     }
 
 
+# ── API: Scheduled Notifications ───────────────────────────────────────────
+
+class NotificationCreateRequest(BaseModel):
+    device_id: str
+    message: str
+    target_users: list[str]
+    is_recurring: bool
+    start_time: Optional[str] = None
+    end_time: Optional[str] = None
+    interval_minutes: Optional[int] = None
+
+@app.post("/api/v1/notifications")
+def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db)):
+    """Create a new notification (one-off or recurring)."""
+    device = db.query(Device).filter(Device.id == req.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    if not req.is_recurring:
+        # One-off: Just queue a command immediately
+        cmd = Command(
+            device_id=req.device_id,
+            action="notify",
+            username="system",
+            payload=json.dumps({
+                "message": req.message,
+                "target_users": req.target_users
+            })
+        )
+        db.add(cmd)
+        db.commit()
+        return {"message": "One-off notification queued."}
+    
+    # Recurring campaign
+    if not req.start_time or not req.end_time or not req.interval_minutes:
+        raise HTTPException(status_code=400, detail="Recurring notifications require start_time, end_time, and interval_minutes")
+    
+    try:
+        st = datetime.fromisoformat(req.start_time.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
+        et = datetime.fromisoformat(req.end_time.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO-8601")
+
+    camp = NotificationCampaign(
+        device_id=req.device_id,
+        message=req.message,
+        target_users=json.dumps(req.target_users),
+        start_time=st,
+        end_time=et,
+        interval_minutes=req.interval_minutes,
+        is_active=True
+    )
+    db.add(camp)
+    db.commit()
+    db.refresh(camp)
+    return {"message": "Recurring campaign created", "campaign_id": camp.id}
+
+@app.get("/api/v1/notifications/{device_id}")
+def get_notifications(device_id: str, db: Session = Depends(get_db)):
+    """Get active recurring campaigns for a device."""
+    campaigns = db.query(NotificationCampaign).filter(
+        NotificationCampaign.device_id == device_id,
+        NotificationCampaign.is_active == True
+    ).order_by(NotificationCampaign.created_at.desc()).all()
+
+    results = []
+    for c in campaigns:
+        results.append({
+            "id": c.id,
+            "message": c.message,
+            "target_users": json.loads(c.target_users),
+            "start_time": c.start_time.isoformat(timespec='milliseconds') + "Z",
+            "end_time": c.end_time.isoformat(timespec='milliseconds') + "Z",
+            "interval_minutes": c.interval_minutes,
+            "last_sent": c.last_sent.isoformat(timespec='milliseconds') + "Z" if c.last_sent else None
+        })
+    return {"campaigns": results}
+
+@app.delete("/api/v1/notifications/{campaign_id}")
+def delete_notification(campaign_id: int, db: Session = Depends(get_db)):
+    """Cancel a recurring campaign."""
+    camp = db.query(NotificationCampaign).filter(NotificationCampaign.id == campaign_id).first()
+    if not camp:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    
+    camp.is_active = False
+    db.commit()
+    return {"message": "Campaign cancelled successfully"}
+
 # ── Serve Portal Static Files ───────────────────────────────────────────────
 
 PORTAL_DIR = Path(__file__).resolve().parent.parent / "portal"

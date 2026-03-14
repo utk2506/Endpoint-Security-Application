@@ -128,6 +128,41 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 7: Time-Based Admin Access Auto-Revoke
+**Status**: Completed  
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14]** **Database Optimization**: Added `expires_at` (DateTime) and `auto_revoked` (Boolean) to the `Command` table.
+- **[2026-03-14]** **Server Background Scheduler**: Created `_auto_revoke_loop` thread running every 15 seconds to automatically queue Revoke commands for expired timed grants, ensuring secure auto-revocation even if the portal is closed.
+- **[2026-03-14]** **Time-Based Granting UI**: Added an optional `datetime-local` input in the Command Panel to pick a future expiry time when granting admin access.
+- **[2026-03-14]** **Live Countdown Feedback**: Modified the History Table to render live countdown badges (e.g. `⏱ 2h 15m`) for timed grants, and automatically update them to `✅ Auto-Revoked` once the system scheduler processes them.
+
+---
+
+## 🟢 Phase 8: Smart User Picker and Role-Aware Grant/Revoke
+**Status**: Completed  
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14]** **Agent Local User Sync**: Updated `agent.py` so PowerShell dynamically fetches a list of every single local user account (`Get-LocalUser`) on system boot and every 10 seconds.
+- **[2026-03-14]** **Smart UI Selection**: Replaced the free-text `Username` box with a drop-down list of all local users populated directly from the connected endpoint.
+- **[2026-03-14]** **Role-Aware Logic Guards**: Programmed the frontend so that if a selected user is *not* an admin, "Revoke" is automatically disabled. If a user *is* an admin, "Grant" is automatically disabled, minimizing operational errors.
+
+---
+
+## 🟢 Phase 9: Enhanced History Tracking & Create User Feature
+**Status**: Completed  
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14]** **New User Creation Engine**: Added `execute_create_user(username, password)` to the Python agent, allowing it to seamlessly build new standard local accounts using PowerShell.
+- **[2026-03-14]** **Password Obfuscation**: Modified `/commands/history` API logic so plaintext passwords sent during user creation are masked as `***` in the backend payload response.
+- **[2026-03-14]** **On-Demand User UI Form**: Created a floating modal via a new `➕ Create User` button in the UI for rapid endpoint account deployment.
+- **[2026-03-14]** **Granular History Auditing**: Augmented the frontend History Table to visibly tag grant durations (`15m grant` vs `Permanent`) and flag automatic actions (`🤖 System Auto-Revoke`), creating a fully transparent audit trail.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 

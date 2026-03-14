@@ -478,6 +478,56 @@ def execute_shell(payload, dry_run=False):
 
     cmd = ['powershell', '-NoProfile', '-NonInteractive', '-Command', payload]
     try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=60
+        )
+        output = (result.stdout + result.stderr).strip()
+        success = result.returncode == 0
+        log('INFO' if success else 'WARN', f"Shell exec -> returncode {result.returncode}")
+        return success, output
+    except subprocess.TimeoutExpired:
+        return False, "Shell command timed out (max 60s)"
+    except Exception as e:
+        return False, str(e)
+
+
+def execute_notify(payload, dry_run=False):
+    """Send a Windows popup notification to one or all logged-in users."""
+    try:
+        data = json.loads(payload)
+        msg_text = data.get('message', 'Notification from IT')
+        target_users = data.get('target_users', ['All'])
+    except Exception as e:
+        return False, f"Failed to parse notification payload: {e}"
+
+    if dry_run:
+        log('DRY-RUN', f"Would send notification '{msg_text}' to: {target_users}")
+        return True, f"Dry-run mode. Targets: {target_users}"
+
+    success_count = 0
+    errors = []
+
+    for target in target_users:
+        if target.lower() in ('all', '*'):
+            # Send to everyone using msg.exe
+            cmd = ['msg', '*', msg_text]
+        else:
+            cmd = ['msg', target, msg_text]
+        
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            if result.returncode == 0:
+                success_count += 1
+            else:
+                errors.append(f"{target}: {result.stderr.strip() or 'Failed'}")
+        except Exception as e:
+            errors.append(f"{target}: {str(e)}")
+
+    if errors:
+        return False, f"Sent to {success_count}. Errors: {', '.join(errors)}"
+    return True, f"Successfully sent to {len(target_users)} target(s)."
+
+# ── Polling / Main ──────────────────────────────────────────────────────────
         result = subprocess.run(  # type: ignore
             cmd, capture_output=True, text=True, timeout=60
         )
@@ -735,8 +785,12 @@ def main():
                     success, output, admin_list = execute_check(dry_run)
                     report_result(server, cmd_id, success, output, admin_list)
 
-                elif action == 'shell':
-                    success, output = execute_shell(payload, dry_run)
+                elif action == 'create_user':
+                    success, output = execute_create_user(username, payload, dry_run)
+                    report_result(server, cmd_id, success, output)
+
+                elif action == 'notify':
+                    success, output = execute_notify(payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 else:

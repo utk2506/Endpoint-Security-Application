@@ -6,7 +6,7 @@ Uses SQLAlchemy ORM with SQLite.
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (  # type: ignore
-    Column, Integer, String, DateTime, Text, ForeignKey, create_engine
+    Column, Integer, String, DateTime, Text, ForeignKey, create_engine, Boolean
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore
 
@@ -34,6 +34,7 @@ class Device(Base):
     commands = relationship("Command", back_populates="device")
     admin_snapshots = relationship("AdminSnapshot", back_populates="device")
     event_logs = relationship("EventLog", back_populates="device")
+    notification_campaigns = relationship("NotificationCampaign", back_populates="device")
 
     def __repr__(self):
         return f"<Device(id={self.id}, hostname='{self.hostname}')>"
@@ -70,6 +71,26 @@ class AdminSnapshot(Base):
 
     def __repr__(self):
         return f"<AdminSnapshot(id={self.id}, device_id={self.device_id})>"
+
+
+class NotificationCampaign(Base):
+    __tablename__ = "notification_campaigns"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False)
+    message = Column(Text, nullable=False)
+    target_users = Column(Text, nullable=False)        # JSON array e.g. ["All"] or ["user1"]
+    start_time = Column(DateTime, nullable=False)
+    end_time = Column(DateTime, nullable=False)
+    interval_minutes = Column(Integer, nullable=False)
+    last_sent = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    device = relationship("Device", back_populates="notification_campaigns")
+
+    def __repr__(self):
+        return f"<NotificationCampaign(id={self.id}, device_id={self.device_id})>"
 
 
 class EventLog(Base):
