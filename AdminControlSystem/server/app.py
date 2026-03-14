@@ -174,14 +174,14 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    if req.action not in ("grant", "revoke", "check", "shell"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, or shell")
+    if req.action not in ("grant", "revoke", "check", "shell", "create_user"):
+        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, or create_user")
 
-    if req.action in ("grant", "revoke") and not req.username:
-        raise HTTPException(status_code=400, detail="Username required for grant/revoke")
+    if req.action in ("grant", "revoke", "create_user") and not req.username:
+        raise HTTPException(status_code=400, detail="Username required for grant/revoke/create_user")
 
-    if req.action == "shell" and not req.payload:
-        raise HTTPException(status_code=400, detail="Payload required for shell commands")
+    if req.action in ("shell", "create_user") and not req.payload:
+        raise HTTPException(status_code=400, detail="Payload (script or password) required for this command type")
 
     # Parse optional expiry time
     expires_at_dt = None
@@ -345,6 +345,7 @@ def command_history(
             "device_hostname": device.hostname if device else "Unknown",
             "action": c.action,
             "username": c.username,
+            "payload": "***" if c.action == "create_user" else c.payload,
             "status": c.status,
             "result": c.result,
             "created_at": c.created_at.isoformat(timespec='milliseconds') + "Z" if c.created_at else None,
@@ -545,6 +546,7 @@ def _auto_revoke_loop():
                     device_id=grant_cmd.device_id,
                     action="revoke",
                     username=grant_cmd.username,
+                    payload="System Auto-Revoke"
                 )
                 db.add(revoke_cmd)
                 grant_cmd.auto_revoked = True

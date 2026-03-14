@@ -273,6 +273,45 @@ async function grantAdmin() {
     }
 }
 
+// ── Create User ────────────────────────────────────────────────────────────
+
+function openCreateUserModal() {
+    if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
+    $('newUserName').value = '';
+    $('newUserPass').value = '';
+    $('createUserModal').classList.add('show');
+}
+
+function closeCreateUserModal() {
+    $('createUserModal').classList.remove('show');
+}
+
+async function submitCreateUser() {
+    const username = $('newUserName').value.trim();
+    const password = $('newUserPass').value;
+
+    if (!username || !password) {
+        toast('Username and password are required', 'error');
+        return;
+    }
+
+    try {
+        toast(`Creating user "${username}"…`, 'info');
+        await api('POST', '/send_command', {
+            device_id: selectedDeviceId,
+            action: 'create_user',
+            username: username,
+            payload: password
+        });
+        
+        toast(`Create command queued for "${username}"`, 'success');
+        closeCreateUserModal();
+        loadHistory();
+    } catch (e) {
+        toast(`Failed to create user: ${e.message}`, 'error');
+    }
+}
+
 async function revokeAdmin() {
     const username = $('userSelect').value.trim();
     if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
@@ -677,11 +716,13 @@ async function loadHistory() {
 
             // Build expiry badge for grant commands
             let expiryBadge = '';
+            let payloadBadge = '';
+
             if (c.action === 'grant' && c.expires_at) {
                 if (c.auto_revoked) {
                     expiryBadge = ` <span style="font-size:10px; background:rgba(34,197,94,0.15); color:#22c55e;
                         border:1px solid rgba(34,197,94,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
-                        🔄 Auto-Revoked</span>`;
+                        ✅ Auto-Revoked</span>`;
                 } else {
                     const expMs = new Date(c.expires_at).getTime() - Date.now();
                     if (expMs > 0) {
@@ -699,10 +740,35 @@ async function loadHistory() {
                 }
             }
 
+            if (c.action === 'revoke' && c.payload === 'System Auto-Revoke') {
+                payloadBadge = `<span style="font-size:10px; background:rgba(34,197,94,0.15); color:#22c55e;
+                        border:1px solid rgba(34,197,94,0.3); border-radius:4px; padding:1px 6px; margin-left:4px; display:inline-block; margin-top:4px;">
+                        🤖 System Auto-Revoke</span>`;
+            } else if (c.action === 'grant') {
+                if (c.expires_at) {
+                    const durationMs = new Date(c.expires_at).getTime() - new Date(c.created_at).getTime();
+                    const durationMins = Math.round(durationMs / 60000);
+                    payloadBadge = `<span style="font-size:10px; background:rgba(59,130,246,0.15); color:#3b82f6;
+                        border:1px solid rgba(59,130,246,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        ${durationMins}m grant</span>`;
+                } else {
+                    payloadBadge = `<span style="font-size:10px; background:rgba(59,130,246,0.15); color:#3b82f6;
+                        border:1px solid rgba(59,130,246,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        Permanent</span>`;
+                }
+            } else if (c.action === 'create_user') {
+                payloadBadge = `<span style="font-size:10px; background:rgba(168,85,247,0.15); color:#a855f7;
+                        border:1px solid rgba(168,85,247,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        New User</span>`;
+            }
+
             return `<tr>
                 <td style="font-weight:600; color:var(--text-primary)">#${c.id}</td>
                 <td>${escapeHtml(c.device_hostname)}</td>
-                <td>${actionIcons[c.action] || ''} ${c.action}${expiryBadge}</td>
+                <td>
+                    <span style="display:flex; align-items:center;">${actionIcons[c.action] || '⚙️'} <span style="text-transform:capitalize; margin-left:4px;">${c.action.replace('_', ' ')}</span></span>
+                    <div style="margin-top:2px;">${payloadBadge}${expiryBadge}</div>
+                </td>
                 <td>${c.username ? escapeHtml(c.username) : '—'}</td>
                 <td><span class="badge ${statusClass}"><span class="badge-dot"></span>${c.status}</span></td>
                 <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"

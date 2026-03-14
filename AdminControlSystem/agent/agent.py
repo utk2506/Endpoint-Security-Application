@@ -437,6 +437,31 @@ $users = Get-LocalUser | Select-Object Name, Enabled | ForEach-Object {
     return []
 
 
+def execute_create_user(username, password, dry_run=False):
+    """Create a new local user account using PowerShell."""
+    # We must construct a secure string for the password
+    ps_cmd = f'$Password = ConvertTo-SecureString "{password}" -AsPlainText -Force; New-LocalUser -Name "{username}" -Password $Password -Description "Created via Admin Control System"'
+    cmd = ['powershell', '-NoProfile', '-Command', ps_cmd]
+
+    if dry_run:
+        # Mask the password in logs
+        safe_cmd = f'$Password = ConvertTo-SecureString "***" -AsPlainText -Force; New-LocalUser -Name "{username}" -Password $Password ...'
+        log('DRY-RUN', f"Would run: {safe_cmd}")
+        return True, "Dry-run mode (command not executed)"
+
+    # Execute, but if it fails don't log the raw command so password doesn't leak in agent log
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15
+        )
+        output = (result.stdout + result.stderr).strip()
+        success = result.returncode == 0
+        log('INFO' if success else 'WARN', f"{'✓' if success else '✗'} Create user {username} → {output}")
+        return success, output
+    except Exception as e:
+        return False, str(e)
+
+
 def execute_grant(username, dry_run=False):
     """Add a user to the local Administrators group using PowerShell."""
     ps_cmd = f'Add-LocalGroupMember -Group "Administrators" -Member "{username}"'
@@ -770,6 +795,10 @@ def main():
 
                 elif action == 'shell':
                     success, output = execute_shell(payload, dry_run)
+                    report_result(server, cmd_id, success, output)
+
+                elif action == 'create_user':
+                    success, output = execute_create_user(username, payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 else:
