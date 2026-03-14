@@ -746,17 +746,56 @@
         <!-- Command History -->
         <div class="card full-width">
             <div class="card-title"><span class="icon">📜</span> Command History</div>
+            
+            <!-- Search & Filters -->
+            <div class="form-row" style="margin-bottom: 20px; align-items: flex-end;">
+                <div style="flex: 1;">
+                    <label for="filterDevice">Device</label>
+                    <select id="filterDevice" onchange="applyFilters()">
+                        <option value="">All Devices</option>
+                    </select>
+                </div>
+                <div style="flex: 1;">
+                    <label for="filterAction">Action</label>
+                    <select id="filterAction" onchange="applyFilters()">
+                        <option value="">All Actions</option>
+                        <option value="grant">Grant</option>
+                        <option value="revoke">Revoke</option>
+                        <option value="check">Check</option>
+                        <option value="shell">Shell</option>
+                    </select>
+                </div>
+                <div style="flex: 1;">
+                    <label for="filterStatus">Status</label>
+                    <select id="filterStatus" onchange="applyFilters()">
+                        <option value="">All Statuses</option>
+                        <option value="pending">Pending</option>
+                        <option value="executing">Executing</option>
+                        <option value="completed">Completed</option>
+                        <option value="failed">Failed</option>
+                    </select>
+                </div>
+                <div style="flex: 2;">
+                    <label for="filterSearch">Search Query</label>
+                    <input type="text" id="filterSearch" placeholder="Search user, result, payload..." onkeydown="if(event.key === 'Enter') applyFilters()">
+                </div>
+                <div>
+                    <button class="btn btn-outline" style="padding: 12px 16px;" onclick="clearFilters()">Clear</button>
+                    <button class="btn btn-primary" style="padding: 12px 16px; margin-left: 8px;" onclick="applyFilters()">Search</button>
+                </div>
+            </div>
+
             <div class="table-wrap">
                 <table>
                     <thead>
                         <tr>
-                            <th>ID</th>
-                            <th>Device</th>
-                            <th>Action</th>
-                            <th>User</th>
-                            <th>Status</th>
-                            <th>Result</th>
-                            <th>Time</th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('id')">ID <span id="sort-idx-id"></span></th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('device_hostname')">Device <span id="sort-idx-device_hostname"></span></th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('action')">Action <span id="sort-idx-action"></span></th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('username')">User <span id="sort-idx-username"></span></th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('status')">Status <span id="sort-idx-status"></span></th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('result')">Result <span id="sort-idx-result"></span></th>
+                            <th style="cursor: pointer; user-select: none;" onclick="sortBy('created_at')">Time <span id="sort-idx-created_at">▼</span></th>
                         </tr>
                     </thead>
                     <tbody id="historyTableBody">
@@ -770,6 +809,27 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+
+            <!-- Pagination Controls -->
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px;">
+                <div style="font-size: 13px; color: var(--text-secondary); display: flex; align-items: center; gap: 16px;">
+                    <div>Showing <span id="pageInfoText">0 results</span></div>
+                    <div>
+                        <select id="limitSelect" onchange="changeLimit()" style="padding: 4px 8px; font-size: 12px; background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text-primary); border-radius: 4px;">
+                            <option value="10">10 per page</option>
+                            <option value="20" selected>20 per page</option>
+                            <option value="50">50 per page</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="btn-group" style="display: flex; align-items: center; gap: 8px;">
+                    <button class="btn btn-outline" id="btnPrevPage" style="padding: 8px 14px; font-size: 12px;" onclick="changePage(-1)" disabled>← Previous</button>
+                    <span style="font-size: 13px; color: var(--text-secondary);">
+                        Page <input type="number" id="pageJumpInput" value="1" min="1" onkeydown="if(event.key === 'Enter') jumpToPage()" style="width: 50px; padding: 4px; text-align: center; border: 1px solid var(--border); background: var(--bg-tertiary); color: var(--text-primary); border-radius: 4px;"> of <span id="totalPagesSpan">1</span>
+                    </span>
+                    <button class="btn btn-outline" id="btnNextPage" style="padding: 8px 14px; font-size: 12px;" onclick="changePage(1)" disabled>Next →</button>
+                </div>
             </div>
         </div>
     </div>

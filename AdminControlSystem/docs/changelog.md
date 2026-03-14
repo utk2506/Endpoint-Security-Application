@@ -58,6 +58,51 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 3: Real-Time Interactive Shell
+**Status**: Completed
+**Completion Date**: March 13, 2026
+
+### Features Implemented
+- **[2026-03-13 23:55]** **WebSocket Relay**: Upgraded the FastAPI backend to support full-duplex WebSocket connections, pairing browser clients with endpoint agents.
+- **[2026-03-13 23:55]** **Agent PTY Integration**: Upgraded the agent using `pywinpty` to spawn real Windows Pseudo-Consoles for native interactive command execution.
+- **[2026-03-13 23:55]** **Browser xterm.js UI**: Embedded `xterm.js` in a glassmorphism modal to render the PowerShell terminal directly inside the web browser.
+- **[2026-03-14 00:05]** **Auto-Sync Prompt**: Synchronized PTY size signaling to automatically draw the terminal prompt upon connection without requiring manual user input.
+
+---
+
+## 🟢 Phase 4: Advanced Command History
+**Status**: Completed
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14 04:05]** **Backend Query Filtering**: Enhanced `/commands/history` to dynamically parse `action`, `status`, and `search` query parameters and filter the SQLAlchemy results organically.
+- **[2026-03-14 04:10]** **Advanced UI Filters**: Deployed a Search & Filter row above the Command History log, allowing instant text-matching against executed command usernames and outputs.
+- **[2026-03-14 04:12]** **Persistent Search State**: Embedded live filter state preservation into the 5-second polling tick so filtering acts seamlessly in real-time.
+
+---
+
+## 🟢 Phase 5: Pagination & Device Filtering
+**Status**: Completed
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14 12:15]** **Backend Optimization**: Modified the FastAPI `/commands/history` endpoint to query with `.offset()` and `.limit()` variables based on dynamic frontend queries, optimizing database load and calculating total result matches.
+- **[2026-03-14 12:15]** **Device Dropdown**: Appended a specific Device identifier filter menu to isolate operations on large scales.
+- **[2026-03-14 12:15]** **Interactive Pagination**: Built a DOM pagination structure at the base of the Command History log with active tracking for standard Previous/Next page navigation without breaking current filters.
+
+---
+
+## 🟢 Command History Enhancement v1.1
+**Status**: Completed  
+**Completion Date**: March 14, 2026
+
+### Features Implemented
+- **[2026-03-14 12:45]** **Interactive Page Navigation**: Transformed the static pagination text into a functional number input allowing immediate jumps to any page.
+- **[2026-03-14 12:45]** **Variable Row Density**: Implemented a "Rows per page" picker permitting data frames of 10, 20, or 50 logged commands at once.
+- **[2026-03-14 12:45]** **Backend Asc/Desc Row Sorting**: Wired up all table headers (ID, Device, Action, User, Status, Result, Time) to trigger SQLite bidirectional sorting dynamically via `sort_by` and `sort_dir` parameters.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 
