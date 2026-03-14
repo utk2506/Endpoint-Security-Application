@@ -409,6 +409,59 @@ $result | ConvertTo-Json -Depth 4 -Compress
 
 # ── Commands ────────────────────────────────────────────────────────────────
 
+
+def collect_all_users():
+    """Collect all local user accounts using PowerShell Get-LocalUser.
+    Returns a list of dicts: [{name, enabled}]
+    """
+    ps_script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$users = Get-LocalUser | Select-Object Name, Enabled | ForEach-Object {
+    @{ name = $_.Name; enabled = [bool]$_.Enabled }
+}
+@($users) | ConvertTo-Json -Compress
+"""
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+            capture_output=True, text=True, timeout=15
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            # Ensure it's always a list
+            if isinstance(data, dict):
+                data = [data]
+            return data or []
+    except Exception as e:
+        log('WARN', f"collect_all_users error: {e}")
+    return []
+
+
+def execute_create_user(username, password, dry_run=False):
+    """Create a new local user account using PowerShell."""
+    # We must construct a secure string for the password
+    ps_cmd = f'$Password = ConvertTo-SecureString "{password}" -AsPlainText -Force; New-LocalUser -Name "{username}" -Password $Password -Description "Created via Admin Control System"'
+    cmd = ['powershell', '-NoProfile', '-Command', ps_cmd]
+
+    if dry_run:
+        # Mask the password in logs
+        safe_cmd = f'$Password = ConvertTo-SecureString "***" -AsPlainText -Force; New-LocalUser -Name "{username}" -Password $Password ...'
+        log('DRY-RUN', f"Would run: {safe_cmd}")
+        return True, "Dry-run mode (command not executed)"
+
+    # Execute, but if it fails don't log the raw command so password doesn't leak in agent log
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=15
+        )
+        output = (result.stdout + result.stderr).strip()
+        success = result.returncode == 0
+        log('INFO' if success else 'WARN', f"{'✓' if success else '✗'} Create user {username} → {output}")
+        return success, output
+    except Exception as e:
+        return False, str(e)
+
+
 def execute_grant(username, dry_run=False):
     """Add a user to the local Administrators group using PowerShell."""
     ps_cmd = f'Add-LocalGroupMember -Group "Administrators" -Member "{username}"'
@@ -691,6 +744,8 @@ def main():
     # ── Register device ─────────────────────────────────────────────────
     log('INFO', 'Collecting system information…')
     system_info = collect_system_info()
+    log('INFO', 'Collecting all local users…')
+    all_users = collect_all_users()
     
     log('INFO', 'Registering device with server…')
     device_id = None
@@ -700,6 +755,7 @@ def main():
             'hostname': hostname,
             'ip_address': ip_address,
             'system_info': system_info,
+            'all_users': all_users,
         })
         if resp and 'device_id' in resp:
             device_id = resp['device_id']
@@ -733,10 +789,12 @@ def main():
             time.sleep(SYS_INFO_INTERVAL)
             # Fetching silently in background
             fresh_info = collect_system_info()
+            fresh_users = collect_all_users()
             api_call(server, 'POST', '/register', {
                 'hostname': hostname,
                 'ip_address': get_ip(),
                 'system_info': fresh_info,
+                'all_users': fresh_users,
             })
 
     if not dry_run:
@@ -779,6 +837,10 @@ def main():
 
                 elif action == 'notify':
                     success, output = execute_notify(payload, dry_run)
+                    report_result(server, cmd_id, success, output)
+
+                elif action == 'create_user':
+                    success, output = execute_create_user(username, payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 else:

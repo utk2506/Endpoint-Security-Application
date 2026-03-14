@@ -6,7 +6,11 @@ Uses SQLAlchemy ORM with SQLite.
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (  # type: ignore
+<<<<<<< HEAD
     Column, Integer, String, DateTime, Text, ForeignKey, create_engine, Boolean
+=======
+    Column, Integer, String, DateTime, Text, ForeignKey, Boolean, create_engine
+>>>>>>> origin/development
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore
 
@@ -30,6 +34,7 @@ class Device(Base):
     registered_at = Column(DateTime, default=utcnow)
     last_seen = Column(DateTime, default=utcnow)
     system_info = Column(Text, nullable=True)
+    all_users = Column(Text, nullable=True)
 
     commands = relationship("Command", back_populates="device")
     admin_snapshots = relationship("AdminSnapshot", back_populates="device")
@@ -52,6 +57,8 @@ class Command(Base):
     result = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow)
     executed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)         # UTC; NULL = no expiry
+    auto_revoked = Column(Boolean, default=False)        # True once server auto-queued a revoke
 
     device = relationship("Device", back_populates="commands")
 

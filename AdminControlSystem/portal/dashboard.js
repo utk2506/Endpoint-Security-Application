@@ -157,15 +157,73 @@ async function loadDevices() {
 // (...) unchanged code up to Command History
 
 
+let currentAdminList = [];
+
 $('deviceSelect')?.addEventListener('change', function () {
     selectedDeviceId = this.value ? this.value : null;
     hideResult();
     if (selectedDeviceId) {
+        populateUserDropdown();
         refreshAdminList();
-        loadNotifyUsers();
-        loadNotifyCampaigns();
     }
 });
+
+function populateUserDropdown() {
+    const select = $('userSelect');
+    if (!select || !selectedDeviceId) return;
+
+    const device = _deviceCache.find(d => d.id == selectedDeviceId);
+    if (!device || !device.all_users) {
+        select.innerHTML = '<option value="">— User list unavailable —</option>';
+        updateCommandButtons();
+        return;
+    }
+
+    const currentVal = select.value;
+    select.innerHTML = '<option value="">— Select a user —</option>';
+
+    device.all_users.forEach(u => {
+        const opt = document.createElement('option');
+        opt.value = u.name;
+        opt.textContent = `${u.enabled ? '👤' : '🚫'} ${u.name}`;
+        select.appendChild(opt);
+    });
+
+    if (currentVal) select.value = currentVal;
+    updateCommandButtons();
+}
+
+function updateCommandButtons() {
+    const select = $('userSelect');
+    const btnGrant = $('btnGrant');
+    const btnRevoke = $('btnRevoke');
+    
+    if (!select || !btnGrant || !btnRevoke) return;
+
+    const username = select.value;
+
+    if (!username) {
+        btnGrant.disabled = false;
+        btnRevoke.disabled = false;
+        btnGrant.style.opacity = '1';
+        btnRevoke.style.opacity = '1';
+        return;
+    }
+
+    const isAdmin = currentAdminList.includes(username);
+
+    if (isAdmin) {
+        btnGrant.disabled = true;
+        btnGrant.style.opacity = '0.4';
+        btnRevoke.disabled = false;
+        btnRevoke.style.opacity = '1';
+    } else {
+        btnGrant.disabled = false;
+        btnGrant.style.opacity = '1';
+        btnRevoke.disabled = true;
+        btnRevoke.style.opacity = '0.4';
+    }
+}
 
 // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -191,9 +249,16 @@ async function checkStatus() {
 }
 
 async function grantAdmin() {
-    const username = $('usernameInput').value.trim();
+    const username = $('userSelect').value.trim();
     if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
-    if (!username) { toast('Enter a username', 'error'); return; }
+    if (!username) { toast('Select a user', 'error'); return; }
+
+    // Read optional expiry (datetime-local gives local time; convert to UTC ISO string)
+    let expiresAt = null;
+    const expiresAtInput = $('expiresAtInput');
+    if (expiresAtInput && expiresAtInput.value) {
+        expiresAt = new Date(expiresAtInput.value).toISOString();
+    }
 
     try {
         showResult('info', '🔄', `Granting admin to "${username}"…`);
@@ -201,9 +266,15 @@ async function grantAdmin() {
             device_id: selectedDeviceId,
             action: 'grant',
             username,
+            expires_at: expiresAt,
         });
-        toast(`Grant command queued for "${username}"`, 'success');
-        showResult('success', '✅', `Grant command queued for "${username}"`);
+
+        const msg = expiresAt
+            ? `Grant queued for "${username}" — auto-revoke at ${new Date(expiresAt).toLocaleString()}`
+            : `Grant command queued for "${username}"`;
+        toast(msg, 'success');
+        showResult('success', '✅', msg);
+        if (expiresAtInput) expiresAtInput.value = '';   // clear after sending
         loadHistory();
     } catch (e) {
         showResult('error', '❌', e.message);
@@ -211,10 +282,49 @@ async function grantAdmin() {
     }
 }
 
-async function revokeAdmin() {
-    const username = $('usernameInput').value.trim();
+// ── Create User ────────────────────────────────────────────────────────────
+
+function openCreateUserModal() {
     if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
-    if (!username) { toast('Enter a username', 'error'); return; }
+    $('newUserName').value = '';
+    $('newUserPass').value = '';
+    $('createUserModal').classList.add('show');
+}
+
+function closeCreateUserModal() {
+    $('createUserModal').classList.remove('show');
+}
+
+async function submitCreateUser() {
+    const username = $('newUserName').value.trim();
+    const password = $('newUserPass').value;
+
+    if (!username || !password) {
+        toast('Username and password are required', 'error');
+        return;
+    }
+
+    try {
+        toast(`Creating user "${username}"…`, 'info');
+        await api('POST', '/send_command', {
+            device_id: selectedDeviceId,
+            action: 'create_user',
+            username: username,
+            payload: password
+        });
+        
+        toast(`Create command queued for "${username}"`, 'success');
+        closeCreateUserModal();
+        loadHistory();
+    } catch (e) {
+        toast(`Failed to create user: ${e.message}`, 'error');
+    }
+}
+
+async function revokeAdmin() {
+    const username = $('userSelect').value.trim();
+    if (!selectedDeviceId) { toast('Select a device first', 'error'); return; }
+    if (!username) { toast('Select a user', 'error'); return; }
 
     try {
         showResult('info', '🔄', `Revoking admin from "${username}"…`);
@@ -573,6 +683,7 @@ async function refreshAdminList() {
         const tbody = $('adminTableBody');
 
         if (!data.admin_users || data.admin_users.length === 0) {
+            currentAdminList = [];
             tbody.innerHTML = `<tr><td colspan="3">
                 <div class="empty-state">
                     <span class="icon">📋</span>
@@ -580,10 +691,13 @@ async function refreshAdminList() {
                 </div>
             </td></tr>`;
             $('statAdmins').textContent = '0';
+            updateCommandButtons();
             return;
         }
 
+        currentAdminList = data.admin_users;
         $('statAdmins').textContent = data.admin_users.length;
+        updateCommandButtons();
 
         tbody.innerHTML = data.admin_users.map(user => {
             const safeUser = escapeAttr(user.replace(/\\/g, '\\\\'));
@@ -605,7 +719,14 @@ async function refreshAdminList() {
 }
 
 function quickRevoke(username) {
-    $('usernameInput').value = username;
+    const select = $('userSelect');
+    if (select) {
+        // Attempt to select the user in the dropdown, but if they aren't in all_users,
+        // we might not match. Just set the value anyway.
+        select.innerHTML = `<option value="${escapeAttr(username)}">${escapeHtml(username)}</option>` + select.innerHTML;
+        select.value = username;
+        updateCommandButtons();
+    }
     revokeAdmin();
 }
 
@@ -741,10 +862,61 @@ async function loadHistory() {
             if (timeStr && !timeStr.endsWith('Z')) timeStr += 'Z';
             const time = formatDate(timeStr);
 
+            // Build expiry badge for grant commands
+            let expiryBadge = '';
+            let payloadBadge = '';
+
+            if (c.action === 'grant' && c.expires_at) {
+                if (c.auto_revoked) {
+                    expiryBadge = ` <span style="font-size:10px; background:rgba(34,197,94,0.15); color:#22c55e;
+                        border:1px solid rgba(34,197,94,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        ✅ Auto-Revoked</span>`;
+                } else {
+                    const expMs = new Date(c.expires_at).getTime() - Date.now();
+                    if (expMs > 0) {
+                        const h = Math.floor(expMs / 3600000);
+                        const m = Math.floor((expMs % 3600000) / 60000);
+                        const countdown = h > 0 ? `${h}h ${m}m` : `${m}m`;
+                        expiryBadge = ` <span style="font-size:10px; background:rgba(251,189,35,0.15); color:#fbbf24;
+                            border:1px solid rgba(251,189,35,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                            ⏱ ${countdown}</span>`;
+                    } else {
+                        expiryBadge = ` <span style="font-size:10px; background:rgba(239,68,68,0.15); color:#ef4444;
+                            border:1px solid rgba(239,68,68,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                            ⏱ Expiring…</span>`;
+                    }
+                }
+            }
+
+            if (c.action === 'revoke' && c.payload === 'System Auto-Revoke') {
+                payloadBadge = `<span style="font-size:10px; background:rgba(34,197,94,0.15); color:#22c55e;
+                        border:1px solid rgba(34,197,94,0.3); border-radius:4px; padding:1px 6px; margin-left:4px; display:inline-block; margin-top:4px;">
+                        🤖 System Auto-Revoke</span>`;
+            } else if (c.action === 'grant') {
+                if (c.expires_at) {
+                    const durationMs = new Date(c.expires_at).getTime() - new Date(c.created_at).getTime();
+                    const durationMins = Math.round(durationMs / 60000);
+                    payloadBadge = `<span style="font-size:10px; background:rgba(59,130,246,0.15); color:#3b82f6;
+                        border:1px solid rgba(59,130,246,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        ${durationMins}m grant</span>`;
+                } else {
+                    payloadBadge = `<span style="font-size:10px; background:rgba(59,130,246,0.15); color:#3b82f6;
+                        border:1px solid rgba(59,130,246,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        Permanent</span>`;
+                }
+            } else if (c.action === 'create_user') {
+                payloadBadge = `<span style="font-size:10px; background:rgba(168,85,247,0.15); color:#a855f7;
+                        border:1px solid rgba(168,85,247,0.3); border-radius:4px; padding:1px 6px; margin-left:4px;">
+                        New User</span>`;
+            }
+
             return `<tr>
                 <td style="font-weight:600; color:var(--text-primary)">#${c.id}</td>
                 <td>${escapeHtml(c.device_hostname)}</td>
-                <td>${actionIcons[c.action] || ''} ${c.action}</td>
+                <td>
+                    <span style="display:flex; align-items:center;">${actionIcons[c.action] || '⚙️'} <span style="text-transform:capitalize; margin-left:4px;">${c.action.replace('_', ' ')}</span></span>
+                    <div style="margin-top:2px;">${payloadBadge}${expiryBadge}</div>
+                </td>
                 <td>${c.username ? escapeHtml(c.username) : '—'}</td>
                 <td><span class="badge ${statusClass}"><span class="badge-dot"></span>${c.status}</span></td>
                 <td style="max-width:180px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;"
