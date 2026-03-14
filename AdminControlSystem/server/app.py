@@ -4,6 +4,8 @@ FastAPI application serving REST API + static portal files.
 """
 
 import json
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict
@@ -94,6 +96,7 @@ class RegisterRequest(BaseModel):
     hostname: str
     ip_address: str
     system_info: Optional[dict] = None
+    all_users: Optional[list[dict]] = None
 
 
 class SendCommandRequest(BaseModel):
@@ -101,6 +104,7 @@ class SendCommandRequest(BaseModel):
     action: str          # grant | revoke | check | shell
     username: Optional[str] = None
     payload: Optional[str] = None
+    expires_at: Optional[str] = None   # ISO-8601 UTC string, e.g. "2026-03-14T18:30:00Z"
 
 
 class CommandResultRequest(BaseModel):
@@ -116,6 +120,7 @@ class CommandResultRequest(BaseModel):
 def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
     """Register a new device or update last_seen for an existing one."""
     sys_info_str = json.dumps(req.system_info) if req.system_info else None
+    all_users_str = json.dumps(req.all_users) if req.all_users else None
 
     device = db.query(Device).filter(Device.hostname == req.hostname).first()
     if device:
@@ -123,11 +128,13 @@ def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
         device.last_seen = datetime.now(timezone.utc)
         if sys_info_str:
             device.system_info = sys_info_str
+        if all_users_str:
+            device.all_users = all_users_str
         db.commit()
         db.refresh(device)
         return {"message": "Device updated", "device_id": device.id}
 
-    device = Device(hostname=req.hostname, ip_address=req.ip_address, system_info=sys_info_str)
+    device = Device(hostname=req.hostname, ip_address=req.ip_address, system_info=sys_info_str, all_users=all_users_str)
     db.add(device)
     db.commit()
     db.refresh(device)
@@ -152,6 +159,7 @@ def list_devices(db: Session = Depends(get_db)):
             "registered_at": d.registered_at.isoformat(timespec='milliseconds') + "Z" if d.registered_at else None,
             "last_seen": d.last_seen.isoformat(timespec='milliseconds') + "Z" if d.last_seen else None,
             "system_info": parse_sys_info(d.system_info),
+            "all_users": parse_sys_info(d.all_users),
         }
         for d in devices
     ]
@@ -166,20 +174,29 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    if req.action not in ("grant", "revoke", "check", "shell"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, or shell")
+    if req.action not in ("grant", "revoke", "check", "shell", "create_user"):
+        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, or create_user")
 
-    if req.action in ("grant", "revoke") and not req.username:
-        raise HTTPException(status_code=400, detail="Username required for grant/revoke")
+    if req.action in ("grant", "revoke", "create_user") and not req.username:
+        raise HTTPException(status_code=400, detail="Username required for grant/revoke/create_user")
 
-    if req.action == "shell" and not req.payload:
-        raise HTTPException(status_code=400, detail="Payload required for shell commands")
+    if req.action in ("shell", "create_user") and not req.payload:
+        raise HTTPException(status_code=400, detail="Payload (script or password) required for this command type")
+
+    # Parse optional expiry time
+    expires_at_dt = None
+    if req.expires_at:
+        try:
+            expires_at_dt = datetime.fromisoformat(req.expires_at.replace('Z', '+00:00')).replace(tzinfo=None)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid expires_at format. Use ISO-8601 e.g. 2026-03-14T18:30:00Z")
 
     cmd = Command(
         device_id=req.device_id,
         action=req.action,
         username=req.username,
         payload=req.payload,
+        expires_at=expires_at_dt,
     )
     db.add(cmd)
     db.commit()
@@ -328,10 +345,13 @@ def command_history(
             "device_hostname": device.hostname if device else "Unknown",
             "action": c.action,
             "username": c.username,
+            "payload": "***" if c.action == "create_user" else c.payload,
             "status": c.status,
             "result": c.result,
             "created_at": c.created_at.isoformat(timespec='milliseconds') + "Z" if c.created_at else None,
             "executed_at": c.executed_at.isoformat(timespec='milliseconds') + "Z" if c.executed_at else None,
+            "expires_at": c.expires_at.isoformat(timespec='milliseconds') + "Z" if c.expires_at else None,
+            "auto_revoked": c.auto_revoked or False,
         })
         
     return {
@@ -496,6 +516,51 @@ def get_event_log_summary(
         "privilege_events": sum(summary.get(e, 0) for e in privilege_events),
         "by_event_name": summary
     }
+
+
+
+# ── Auto-Revoke Background Scheduler ────────────────────────────────────────
+
+def _auto_revoke_loop():
+    """Runs every 15 seconds; finds expired grant commands and queues revokes."""
+    import time as _time
+    while True:
+        _time.sleep(15)
+        try:
+            db = SessionLocal()
+            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+            expired = (
+                db.query(Command)
+                .filter(
+                    Command.action == "grant",
+                    Command.status == "completed",
+                    Command.auto_revoked == False,
+                    Command.expires_at != None,
+                    Command.expires_at <= now_utc,
+                )
+                .all()
+            )
+            for grant_cmd in expired:
+                # Queue an auto-revoke for this user
+                revoke_cmd = Command(
+                    device_id=grant_cmd.device_id,
+                    action="revoke",
+                    username=grant_cmd.username,
+                    payload="System Auto-Revoke"
+                )
+                db.add(revoke_cmd)
+                grant_cmd.auto_revoked = True
+            if expired:
+                db.commit()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+
+# Start the auto-revoke watcher in background when the module loads
+_revoke_thread = threading.Thread(target=_auto_revoke_loop, daemon=True)
+_revoke_thread.start()
 
 
 # ── Serve Portal Static Files ───────────────────────────────────────────────

@@ -777,8 +777,20 @@
                 </div>
 
                 <div style="margin-bottom: 16px;">
-                    <label for="usernameInput">Username</label>
-                    <input type="text" id="usernameInput" placeholder="e.g. rahul">
+                    <label for="userSelect">Select User</label>
+                    <select id="userSelect" style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px; color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;" onchange="updateCommandButtons()">
+                        <option value="">— Select a user —</option>
+                    </select>
+                </div>
+
+                <div style="margin-bottom: 16px;" id="expiryRow">
+                    <label for="expiresAtInput" style="display:flex; align-items:center; gap:6px;">
+                        ⏱ Auto-Revoke At
+                        <span style="font-size:11px; color:var(--text-secondary); font-weight:400;">(optional — leave blank for permanent)</span>
+                    </label>
+                    <input type="datetime-local" id="expiresAtInput"
+                        style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px;
+                               color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;">
                 </div>
 
                 <div class="btn-group">
@@ -790,6 +802,12 @@
                     </button>
                     <button class="btn btn-danger" id="btnRevoke" onclick="revokeAdmin()">
                         🚫 Revoke Admin
+                    </button>
+                </div>
+                
+                <div class="btn-group" style="margin-top: 10px;">
+                    <button class="btn btn-outline" id="btnCreateUser" onclick="openCreateUserModal()" style="padding: 10px 16px;">
+                        ➕ Create User
                     </button>
                     <button class="btn btn-outline" id="btnSysInfo" onclick="openSysInfoModal()" style="padding: 10px 16px;">
                         🖥️ System Info
@@ -1045,6 +1063,29 @@
                     </span>
                     <button class="btn btn-outline" id="btnEvtNextPage" style="padding:8px 14px; font-size:12px;" onclick="changeEventPage(1)" disabled>Next →</button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create User Modal -->
+    <div class="modal-overlay" id="createUserModal" onclick="if(event.target === this) closeCreateUserModal()">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>➕ Create New Local User</h3>
+                <button class="close-btn" onclick="closeCreateUserModal()">×</button>
+            </div>
+            <div class="sys-info-section" style="padding: 24px;">
+                <div style="margin-bottom: 16px;">
+                    <label>Username</label>
+                    <input type="text" id="newUserName" placeholder="Enter new username" style="width:100%; padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:var(--background); color:white; font-size:14px; margin-top:6px;">
+                </div>
+                <div style="margin-bottom: 24px;">
+                    <label>Password</label>
+                    <input type="password" id="newUserPass" placeholder="Enter new user password" style="width:100%; padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:var(--background); color:white; font-size:14px; margin-top:6px;">
+                </div>
+                <button class="btn btn-success" style="width:100%; justify-content:center;" onclick="submitCreateUser()">
+                    ✅ Create User on Device
+                </button>
             </div>
         </div>
     </div>
