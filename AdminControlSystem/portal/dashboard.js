@@ -125,6 +125,16 @@ async function loadDevices() {
         if (currentEvtFilterVal && evtFilterSelect) evtFilterSelect.value = currentEvtFilterVal;
 
         $('statDevices').textContent = devices.length;
+
+        // Auto-refresh the System Info Modal silently if it is open
+        const modal = $('sysInfoModal');
+        if (modal && modal.classList.contains('show') && selectedDeviceId) {
+            const activeDevice = devices.find(d => d.id == selectedDeviceId);
+            if (activeDevice && activeDevice.system_info) {
+                renderSysInfo($('sysInfoBody'), activeDevice.system_info);
+            }
+        }
+
     } catch {
         setConnected(false);
     }
