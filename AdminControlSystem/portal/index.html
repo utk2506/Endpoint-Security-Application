@@ -855,21 +855,28 @@
         <div class="card full-width" id="notifyPanel">
             <div class="card-title"><span class="icon">📢</span> Remote User Notifications</div>
             <p style="color:var(--text-secondary); font-size:13px; margin-bottom:14px;">
-                Send Windows pop-up messages to users logged into the selected device. Schedule recurring pop-ups to ensure visibility.
+                Send Windows pop-up messages to any device. Choose a target device, write your message, and send once or schedule recurring reminders.
             </p>
             
             <div class="grid-2">
-                <!-- Left side: Message & Target -->
+                <!-- Left side: Device, Message & Target -->
                 <div>
+                    <div style="margin-bottom: 16px;">
+                        <label for="notifyDeviceSelect">Target Device</label>
+                        <select id="notifyDeviceSelect" onchange="loadNotifyCampaigns()">
+                            <option value="">— Select a device —</option>
+                        </select>
+                    </div>
+
                     <div style="margin-bottom: 16px;">
                         <label for="notifyMessage">Message to Display</label>
                         <textarea id="notifyMessage" rows="3" placeholder="e.g. Please save your work, IT will reboot this machine in 15 minutes." style="resize:vertical;"></textarea>
                     </div>
                     
                     <div style="margin-bottom: 16px;">
-                        <label>Target Users</label>
+                        <label>Target Users on Device</label>
                         <div id="notifyUsersList" style="background:var(--bg-tertiary); max-height:120px; overflow-y:auto; border:1px solid var(--border); border-radius:4px; padding:8px;">
-                            <div class="empty-state" style="padding:10px 0; font-size:12px;">Select a device to load users...</div>
+                            <!-- Built by JS on page load -->
                         </div>
                     </div>
                 </div>
@@ -951,6 +958,8 @@
                         <option value="revoke">Revoke</option>
                         <option value="check">Check</option>
                         <option value="shell">Shell</option>
+                        <option value="notify">Notify</option>
+                        <option value="create_user">Create User</option>
                     </select>
                 </div>
                 <div style="flex: 1;">

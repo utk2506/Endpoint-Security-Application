@@ -527,20 +527,8 @@ def execute_notify(payload, dry_run=False):
         return False, f"Sent to {success_count}. Errors: {', '.join(errors)}"
     return True, f"Successfully sent to {len(target_users)} target(s)."
 
+
 # ── Polling / Main ──────────────────────────────────────────────────────────
-        result = subprocess.run(  # type: ignore
-            cmd, capture_output=True, text=True, timeout=60
-        )
-        output = (result.stdout + "\n" + result.stderr).strip()
-        success = result.returncode == 0
-        log('INFO' if success else 'WARN', f"Shell execution {'✓' if success else '✗'} → length: {len(output)}")
-        return success, output
-    except subprocess.TimeoutExpired:
-        log('WARN', "Shell execution timed out")
-        return False, "Command timed out after 60 seconds"
-    except Exception as e:
-        log('ERROR', f"Shell execution failed: {e}")
-        return False, str(e)
 
 
 def _run_cmd(cmd, display_cmd=None):

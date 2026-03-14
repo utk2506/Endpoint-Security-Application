@@ -81,9 +81,11 @@ async function loadDevices() {
         const select = $('deviceSelect');
         const filterSelect = $('filterDevice');
         const evtFilterSelect = $('evtFilterDevice');
+        const notifySelect = $('notifyDeviceSelect');
         const currentVal = select.value;
         const currentFilterVal = filterSelect ? filterSelect.value : '';
         const currentEvtFilterVal = evtFilterSelect ? evtFilterSelect.value : '';
+        const currentNotifyVal = notifySelect ? notifySelect.value : '';
         
         select.innerHTML = '<option value="">— Select a device —</option>';
         if (filterSelect) {
@@ -91,6 +93,9 @@ async function loadDevices() {
         }
         if (evtFilterSelect) {
             evtFilterSelect.innerHTML = '<option value="">All Devices</option>';
+        }
+        if (notifySelect) {
+            notifySelect.innerHTML = '<option value="">— Select a device —</option>';
         }
 
         const now = new Date();
@@ -117,12 +122,20 @@ async function loadDevices() {
                 eOpt.textContent = `${d.hostname} (${d.ip_address})`;
                 evtFilterSelect.appendChild(eOpt);
             }
+
+            if (notifySelect) {
+                const nOpt = document.createElement('option');
+                nOpt.value = d.id;
+                nOpt.textContent = `${statusIcon} ${d.hostname} (${d.ip_address})`;
+                notifySelect.appendChild(nOpt);
+            }
         });
 
         // Restore selection
         if (currentVal) select.value = currentVal;
         if (currentFilterVal && filterSelect) filterSelect.value = currentFilterVal;
         if (currentEvtFilterVal && evtFilterSelect) evtFilterSelect.value = currentEvtFilterVal;
+        if (currentNotifyVal && notifySelect) notifySelect.value = currentNotifyVal;
 
         $('statDevices').textContent = devices.length;
 
@@ -149,6 +162,8 @@ $('deviceSelect')?.addEventListener('change', function () {
     hideResult();
     if (selectedDeviceId) {
         refreshAdminList();
+        loadNotifyUsers();
+        loadNotifyCampaigns();
     }
 });
 
@@ -233,6 +248,145 @@ async function runShellCommand() {
         $('shellPayload').value = ''; // clear input
         loadHistory();
     } catch (e) {
+        toast(e.message, 'error');
+    }
+}
+
+// ── Notifications ──────────────────────────────────────────────────────────
+
+function toggleNotifySchedule() {
+    const isRecurring = $('notifyScheduleType').value === 'recurring';
+    $('notifyRecurringOptions').style.display = isRecurring ? 'block' : 'none';
+}
+
+async function loadNotifyUsers() {
+    if (!selectedDeviceId) return;
+    
+    // We can fetch the admin list just to populate the user checkboxes
+    // Or we could wait for the next check/grant. For now, we'll hit admin_list.
+    try {
+        const resp = await api('GET', `/admin_list/${selectedDeviceId}`);
+        // But what if we want ALL users? We implemented Get-LocalUser in 'check' response?
+        // Wait, 'check' response returns ONLY Administrators.
+        // In Phase 8, we added `RefreshLocalUsers` to the agent, which sends full local user list.
+        // Where does it save it? The backend didn't save the full user list to the DB.
+        // Let's fallback to asking the admin to type it, or for now, just provide "All" and let them type.
+    } catch (e) {
+        console.warn(e);
+    }
+}
+
+// Actually, in Phase 10 we need dynamically built checkboxes. The easiest way without adding a new API is to just provide 'All Users' by default, and a custom text box.
+// Let's build that list UI manually.
+function buildNotifyUsersList(users) {
+    const list = $('notifyUsersList');
+    list.innerHTML = `
+        <label style="display:flex; align-items:center; gap:8px; font-weight:bold; margin-bottom:6px;">
+            <input type="checkbox" id="notifyTargetAll" value="All" checked onchange="toggleNotifyCustomTarget()">
+            All Logged-in Users
+        </label>
+        <div id="notifyCustomTargetWrap" style="display:none; margin-top:8px;">
+            <label style="font-size:12px; color:var(--text-secondary);">Or type specific usernames (comma separated)</label>
+            <input type="text" id="notifyTargetCustom" placeholder="e.g. rahul, admin">
+        </div>
+    `;
+}
+// Run it on load
+buildNotifyUsersList();
+
+window.toggleNotifyCustomTarget = function() {
+    const wantAll = $('notifyTargetAll').checked;
+    $('notifyCustomTargetWrap').style.display = wantAll ? 'none' : 'block';
+};
+
+async function sendNotification() {
+    const notifyDeviceId = $('notifyDeviceSelect').value;
+    if (!notifyDeviceId) { toast('Select a target device first', 'error'); return; }
+
+    const message = $('notifyMessage').value.trim();
+    if (!message) { toast('Enter a message', 'error'); return; }
+
+    const wantAll = $('notifyTargetAll').checked;
+    let targetUsers = [];
+    if (wantAll) {
+        targetUsers = ['All'];
+    } else {
+        const custom = $('notifyTargetCustom').value.split(',').map(s => s.trim()).filter(Boolean);
+        if (!custom.length) { toast('Enter at least one target user', 'error'); return; }
+        targetUsers = custom;
+    }
+
+    const isRecurring = $('notifyScheduleType').value === 'recurring';
+    const stInput = $('notifyStartTime').value;
+    const etInput = $('notifyEndTime').value;
+    const interval = parseInt($('notifyInterval').value, 10);
+
+    const payload = {
+        device_id: notifyDeviceId,
+        message,
+        target_users: targetUsers,
+        is_recurring: isRecurring
+    };
+
+    if (isRecurring) {
+        if (!etInput) { toast('End Time is required for recurring campaigns', 'error'); return; }
+        if (isNaN(interval) || interval < 1) { toast('Invalid interval', 'error'); return; }
+        
+        let st = stInput ? new Date(stInput) : new Date();
+        let et = new Date(etInput);
+        
+        payload.start_time = st.toISOString();
+        payload.end_time = et.toISOString();
+        payload.interval_minutes = interval;
+    }
+
+    try {
+        await api('POST', '/api/v1/notifications', payload);
+        toast(isRecurring ? 'Recurring notification campaign created!' : 'Notification command queued!', 'success');
+        $('notifyMessage').value = '';
+        if (isRecurring) loadNotifyCampaigns();
+        loadHistory();
+    } catch (e) {
+        toast(e.message, 'error');
+    }
+}
+
+async function loadNotifyCampaigns() {
+    const notifyDeviceId = $('notifyDeviceSelect') ? $('notifyDeviceSelect').value : selectedDeviceId;
+    if (!notifyDeviceId) return;
+    try {
+        const resp = await api('GET', `/api/v1/notifications/${notifyDeviceId}`);
+        const tbody = $('notifyCampaignsBody');
+        tbody.innerHTML = '';
+        
+        if (!resp.campaigns || resp.campaigns.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="5"><div class="empty-state" style="padding:15px; font-size:12px;">No active campaigns.</div></td></tr>`;
+            return;
+        }
+
+        for (const c of resp.campaigns) {
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${escapeHTML(c.message)}</td>
+                <td><span class="badge badge-info">${escapeHTML(c.target_users.join(', '))}</span></td>
+                <td>Every ${c.interval_minutes}m</td>
+                <td>${formatDate(c.end_time)}</td>
+                <td>
+                    <button class="btn btn-danger" style="padding:4px 8px; font-size:11px;" onclick="cancelNotifyCampaign(${c.id})">Cancel</button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        }
+    } catch(e) { console.warn(e); }
+}
+
+async function cancelNotifyCampaign(id) {
+    if (!confirm('Cancel this recurring notification campaign?')) return;
+    try {
+        await api('DELETE', `/api/v1/notifications/${id}`);
+        toast('Campaign cancelled', 'success');
+        loadNotifyCampaigns();
+    } catch(e) {
         toast(e.message, 'error');
     }
 }

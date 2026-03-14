@@ -163,6 +163,20 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 10: Remote User Notifications
+**Status**: Completed  
+**Completion Date**: March 15, 2026
+
+### Features Implemented
+- **[2026-03-15]** **Notification Campaign Scheduler**: Added a new `NotificationCampaign` database table and a background server thread that automatically queues recurring popup messages to endpoints at configurable time intervals.
+- **[2026-03-15]** **Single-Fire Notification**: One-off popup messages can be sent instantly to all or specific logged-in users without creating a repeating schedule.
+- **[2026-03-15]** **Repeating Notification Mode**: Supports scheduling a start time, an end time, and a repeat interval (e.g., every 5 minutes) for persistent nagging. The server loop automatically cancels expired campaigns.
+- **[2026-03-15]** **Windows `msg.exe` Integration**: Agent uses native Windows messaging tools to display a system pop-up on any live user session without requiring additional software.
+- **[2026-03-15]** **Campaign Manager UI**: The portal shows a live table of all active recurring campaigns with a "Cancel" button to immediately stop a specific campaign.
+- **[2026-03-15]** **Action Allow List Fix**: The `/send_command` backend endpoint now properly validates and permits `notify` and `create_user` as legitimate actions.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 

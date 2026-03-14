@@ -166,8 +166,8 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    if req.action not in ("grant", "revoke", "check", "shell"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, or shell")
+    if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify"):
+        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, or notify")
 
     if req.action in ("grant", "revoke") and not req.username:
         raise HTTPException(status_code=400, detail="Username required for grant/revoke")
@@ -536,9 +536,9 @@ def create_notification(req: NotificationCreateRequest, db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="Recurring notifications require start_time, end_time, and interval_minutes")
     
     try:
-        st = datetime.fromisoformat(req.start_time.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
-        et = datetime.fromisoformat(req.end_time.replace('Z', '+00:00')).replace(tzinfo=timezone.utc)
-    except ValueError:
+        st = datetime.fromisoformat(req.start_time.replace('Z', '+00:00')).astimezone(timezone.utc).replace(tzinfo=None)
+        et = datetime.fromisoformat(req.end_time.replace('Z', '+00:00')).astimezone(timezone.utc).replace(tzinfo=None)
+    except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO-8601")
 
     camp = NotificationCampaign(
