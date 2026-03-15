@@ -341,23 +341,25 @@ $cpuLoad  = (Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercen
 # Disks & BitLocker
 $disksRaw = Get-WmiObject Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
     $drive = $_.DeviceID
-    $bl = manage-bde -status $drive
+    $blRaw = manage-bde -status $drive 2>$null
+    $bl = ($blRaw | Out-String)
     
-    $perc = '0%'
-    if ($bl -match 'Percentage Encrypted:\s+(\d+(\.\d+)?%)') { $perc = $matches[1] }
+    $perc = 'N/A'
+    if ($bl -match 'Percentage Encrypted:\s+([\d\.]+\s*%)') { $perc = $matches[1].Trim() }
     
-    $prot = 'Off'
-    if ($bl -match 'Protection Status:\s+(On|Off)') { $prot = $matches[1] }
+    $prot = 'Unknown'
+    if ($bl -match 'Protection Status:\s+Protection\s+(On|Off)') { $prot = $matches[1] }
     elseif ($bl -match 'Protection Status:\s+(\w+)') { $prot = $matches[1] }
 
-    $status = if ($bl -match 'Conversion Status:\s+(.+)') { $matches[1] } else { 'Ready' }
+    $conv = 'Unknown'
+    if ($bl -match 'Conversion Status:\s+(.+)') { $conv = $matches[1].Trim() }
 
     @{
         drive       = $drive
         size_gb     = [math]::Round($_.Size / 1GB, 2)
         free_gb     = [math]::Round($_.FreeSpace / 1GB, 2)
-        bitlocker   = "$perc ($prot)"
-        bl_status   = $status
+        bitlocker   = "$perc (Protection $prot)"
+        bl_status   = $conv
     }
 }
 
