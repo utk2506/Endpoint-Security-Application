@@ -77,7 +77,10 @@ async function loadDevices() {
     try {
         const devices = await api('GET', '/devices');
         _deviceCache = devices;  // keep a copy for the System Info modal
+        window._allDevices = devices; // expose for dashboard charts
         setConnected(true);
+        // Update dashboard charts if the view is active
+        if (typeof window.onDashboardDataLoaded === 'function') window.onDashboardDataLoaded();
 
         const select = $('deviceSelect');
         const filterSelect = $('filterDevice');
