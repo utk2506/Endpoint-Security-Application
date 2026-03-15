@@ -101,7 +101,7 @@ class RegisterRequest(BaseModel):
 
 class SendCommandRequest(BaseModel):
     device_id: str
-    action: str          # grant | revoke | check | shell
+    action: str          # grant | revoke | check | shell | create_user | notify | get_bitlocker_key
     username: Optional[str] = None
     payload: Optional[str] = None
     expires_at: Optional[str] = None   # ISO-8601 UTC string, e.g. "2026-03-14T18:30:00Z"
@@ -174,14 +174,17 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, or notify")
+    if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify", "get_bitlocker_key"):
+        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, notify, or get_bitlocker_key")
 
     if req.action in ("grant", "revoke", "create_user") and not req.username:
         raise HTTPException(status_code=400, detail="Username required for grant/revoke/create_user")
 
     if req.action in ("shell", "create_user") and not req.payload:
         raise HTTPException(status_code=400, detail="Payload (script or password) required for this command type")
+
+    if req.action == "get_bitlocker_key" and not req.payload:
+        raise HTTPException(status_code=400, detail="Drive letter required for get_bitlocker_key (e.g. C:)")
 
     # Parse optional expiry time
     expires_at_dt = None

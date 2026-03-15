@@ -1346,6 +1346,24 @@ function renderSysInfo(container, info) {
     </div>`;
 }
 
+async function getBitLockerKey(deviceId, driveLetter) {
+    if (!confirm(`Retrieve BitLocker Recovery Key for ${driveLetter}?\n\nThis action will be logged in Command History.`)) return;
+
+    try {
+        await api('POST', '/send_command', {
+            device_id: deviceId,
+            action: 'get_bitlocker_key',
+            payload: driveLetter
+        });
+        toast(`Recovery key request sent for ${driveLetter}`, 'success');
+        closeSysInfoModal();
+        showSection('cmd-history');
+        setTimeout(() => loadHistory(), 1000);
+    } catch (e) {
+        toast(e.message || 'Failed to send recovery key request', 'error');
+    }
+}
+
 // ── Polling ────────────────────────────────────────────────────────────────
 
 async function pollAll() {
