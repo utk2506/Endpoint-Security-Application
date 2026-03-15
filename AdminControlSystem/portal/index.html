@@ -132,6 +132,12 @@
         <img src="/portal/chimera_logo.png" alt="Chimera Technologies">
     </div>
     <div class="toolbar-right">
+        <div style="display:flex; align-items:center; gap:12px; margin-right:16px;">
+            <select id="deviceSelect" onchange="if(typeof refreshAdminList === 'function' && document.getElementById('view-push').classList.contains('active')) refreshAdminList();" style="width:200px; padding:4px 8px; font-size:13px; border-radius:4px; border:1px solid #ced4da; height:28px;">
+                <option value="">— Select a device —</option>
+            </select>
+            <button class="btn btn-primary btn-sm" id="btnSysInfo" onclick="openSysInfoModal()" style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer; background:var(--blue); color:#fff; border:none; border-bottom:2px solid #0056b3; box-shadow:0 1px 3px rgba(0,0,0,0.1);">🖥️ System Info</button>
+        </div>
         <div class="conn-badge">
             <span class="conn-dot" id="connectionDot"></span>
             <span id="connectionText">Connecting…</span>
@@ -338,12 +344,7 @@
             <div class="ops-card" id="commandPanel">
                 <div class="ops-card-header">⚡ Command Panel</div>
                 <div class="ops-card-body">
-                    <div class="form-field">
-                        <label>Target Device</label>
-                        <select id="deviceSelect">
-                            <option value="">— Select a device —</option>
-                        </select>
-                    </div>
+                    <div style="font-size:13px; color:var(--text-2); margin-bottom:12px;">Target device is selected in the global toolbar.</div>
                     <div class="form-field">
                         <label>Select User</label>
                         <select id="userSelect" onchange="updateCommandButtons()">
@@ -361,7 +362,6 @@
                     </div>
                     <div class="btn-group" style="margin-top:8px;">
                         <button class="btn btn-outline btn-sm" id="btnCreateUser" onclick="openCreateUserModal()">➕ Create User</button>
-                        <button class="btn btn-outline btn-sm" id="btnSysInfo" onclick="openSysInfoModal()">🖥️ System Info</button>
                     </div>
                     <div class="result-box" id="resultBox">
                         <span id="resultIcon"></span>
@@ -505,8 +505,8 @@
                     <input type="text" id="filterSearch" placeholder="Search user, result, payload…" onkeydown="if(event.key==='Enter') applyFilters()">
                 </div>
                 <div style="display:flex;gap:6px;">
-                    <button class="btn btn-outline btn-sm" onclick="clearFilters()">Clear</button>
-                    <button class="btn btn-primary btn-sm" onclick="applyFilters()">Search</button>
+                    <button class="btn btn-outline" onclick="clearFilters()">Clear</button>
+                    <button class="btn btn-primary" onclick="applyFilters()">Search</button>
                 </div>
             </div>
 
@@ -589,8 +589,8 @@
                     <input type="text" id="evtFilterSearch" placeholder="Search user, message, event name…" onkeydown="if(event.key==='Enter') applyEventFilters()">
                 </div>
                 <div style="display:flex;gap:6px;">
-                    <button class="btn btn-outline btn-sm" onclick="clearEventFilters()">Clear</button>
-                    <button class="btn btn-primary btn-sm" onclick="applyEventFilters()">Search</button>
+                    <button class="btn btn-outline" onclick="clearEventFilters()">Clear</button>
+                    <button class="btn btn-primary" onclick="applyEventFilters()">Search</button>
                 </div>
             </div>
 

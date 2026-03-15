@@ -149,10 +149,10 @@ async function loadDevices() {
             const isFirstLoad = document.querySelectorAll('.notify-target-device').length === 0;
 
             let html = `
-                <label style="display:flex; align-items:center; gap:8px; font-weight:bold; margin-bottom:6px;">
-                    <input type="checkbox" id="notifyTargetAllDevices" value="All" ${isFirstLoad ? 'checked' : ''} onchange="document.querySelectorAll('.notify-target-device').forEach(c => c.checked = this.checked); loadNotifyCampaigns();">
-                    Target All Devices
-                </label>
+                <div style="display:flex; align-items:center; gap:8px; font-weight:bold; margin-bottom:6px; cursor:pointer;" onclick="document.getElementById('notifyTargetAllDevices').click()">
+                    <input type="checkbox" id="notifyTargetAllDevices" value="All" ${isFirstLoad ? 'checked' : ''} onclick="event.stopPropagation()" onchange="document.querySelectorAll('.notify-target-device').forEach(c => c.checked = this.checked); loadNotifyCampaigns();">
+                    <label style="margin:0; padding:0; cursor:pointer; text-transform:none; font-size:13px; font-weight:700; color:var(--text);">Target All Devices</label>
+                </div>
                 <div style="margin-top:8px; padding-left: 24px;">
             `;
             devices.forEach(d => {
@@ -161,10 +161,10 @@ async function loadDevices() {
                 const statusIcon = isOnline ? '🟢' : '🔴';
                 const isChecked = isFirstLoad || existingCheckboxes.includes(d.id.toString());
                 html += `
-                    <label style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px;">
-                        <input type="checkbox" class="notify-target-device" value="${d.id}" ${isChecked ? 'checked' : ''} onchange="loadNotifyCampaigns();">
-                        ${statusIcon} ${d.hostname} (${d.ip_address})
-                    </label>
+                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px; cursor:pointer;" onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change'));">
+                        <input type="checkbox" class="notify-target-device" value="${d.id}" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation()" onchange="loadNotifyCampaigns();">
+                        <label style="margin:0; padding:0; cursor:pointer; text-transform:none; font-size:13px; font-weight:400; color:var(--text);">${statusIcon} ${d.hostname} (${d.ip_address})</label>
+                    </div>
                 `;
             });
             html += '</div>';
