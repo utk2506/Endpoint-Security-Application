@@ -585,7 +585,6 @@ def execute_check(dry_run=False):
         if success:
             in_members = False
             for line in result.stdout.strip().splitlines():
-                line = line.strip()
                 if line.startswith('---'):
                     in_members = True
                     continue
@@ -625,40 +624,174 @@ def execute_shell(payload, dry_run=False):
 
 
 def execute_notify(payload, dry_run=False):
-    """Send a Windows popup notification to one or all logged-in users."""
+    """Send a modern WPF notification to the system."""
     try:
         data = json.loads(payload)
         msg_text = data.get('message', 'Notification from IT')
+        # target_users is parsed but the modern UI currently shows on the active session
+        # where the agent is running.
         target_users = data.get('target_users', ['All'])
     except Exception as e:
         return False, f"Failed to parse notification payload: {e}"
 
     if dry_run:
-        log('DRY-RUN', f"Would send notification '{msg_text}' to: {target_users}")
-        return True, f"Dry-run mode. Targets: {target_users}"
+        log('DRY-RUN', f"Would send modern notification: '{msg_text}'")
+        return True, f"Dry-run mode. Message: {msg_text}"
 
-    success_count = 0
-    errors = []
+    return execute_modern_notify(msg_text)
 
-    for target in target_users:
-        if target.lower() in ('all', '*'):
-            # Send to everyone using msg.exe
-            cmd = ['msg', '*', msg_text]
-        else:
-            cmd = ['msg', target, msg_text]
-        
-        try:
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-            if result.returncode == 0:
-                success_count += 1
+
+def execute_modern_notify(message):
+    """Launch a styled WPF notification window via PowerShell, with session handling."""
+    # Detect session
+    session_id = 0
+    try:
+        current_session = ctypes.c_uint32()
+        if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(current_session)):
+            session_id = current_session.value
+    except:
+        pass
+
+    if session_id == 0:
+        log('WARN', "Agent is in Session 0 (Services). UI cannot be displayed to the user.")
+        log('INFO', "Falling back to 'msg *' for global notification.")
+        # Fallback to msg.exe which can sometimes reach sessions from 0
+        subprocess.run(['msg', '*', message], capture_output=True)
+        return True, "Agent in Session 0. Used 'msg *' fallback."
+
+    # Escape for use inside a C# string literal
+    safe_msg = message.replace('\\', '\\\\').replace('"', '\\"')
+
+    ps_content = f"""
+$pfw = ([Reflection.Assembly]::LoadWithPartialName('PresentationFramework')).Location
+$pfc = ([Reflection.Assembly]::LoadWithPartialName('PresentationCore')).Location
+$wb  = ([Reflection.Assembly]::LoadWithPartialName('WindowsBase')).Location
+$sx  = ([Reflection.Assembly]::LoadWithPartialName('System.Xaml')).Location
+
+Add-Type -AssemblyName PresentationFramework
+Add-Type -AssemblyName PresentationCore
+Add-Type -AssemblyName WindowsBase
+
+Add-Type -ReferencedAssemblies $pfw, $pfc, $wb, $sx, "System.Core", "mscorlib" @"
+using System;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
+
+public class ChimeraNotifyWin {{
+    public static void Show(string msg) {{
+        var win = new Window {{
+            Title = "Chimera Control Message",
+            Width = 460,
+            Height = 260,
+            WindowStyle = WindowStyle.None,
+            AllowsTransparency = true,
+            Background = Brushes.Transparent,
+            WindowStartupLocation = WindowStartupLocation.CenterScreen,
+            Topmost = true,
+            ShowInTaskbar = true,
+            ResizeMode = ResizeMode.NoResize
+        }};
+
+        var outerBorder = new Border {{
+            Background = Brushes.White,
+            BorderBrush = new SolidColorBrush(Color.FromRgb(0x1a, 0x25, 0x35)),
+            BorderThickness = new Thickness(1.5),
+            CornerRadius = new CornerRadius(12),
+            Effect = new DropShadowEffect {{ BlurRadius = 15, Direction = 270, Opacity = 0.3, ShadowDepth = 3 }}
+        }};
+
+        var grid = new Grid();
+        grid.RowDefinitions.Add(new RowDefinition {{ Height = new GridLength(50) }});
+        grid.RowDefinitions.Add(new RowDefinition {{ Height = new GridLength(1, GridUnitType.Star) }});
+        grid.RowDefinitions.Add(new RowDefinition {{ Height = new GridLength(70) }});
+
+        // Header
+        var headerBg = new Border {{
+            Background = new SolidColorBrush(Color.FromRgb(0x1a, 0x25, 0x35)),
+            CornerRadius = new CornerRadius(10, 10, 0, 0)
+        }};
+        var headerText = new TextBlock {{
+            Text = "CHIMERA SECURITY NOTIFICATION",
+            Foreground = new SolidColorBrush(Color.FromRgb(0xE0, 0xE0, 0xE0)),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            FontWeight = FontWeights.SemiBold,
+            FontSize = 13
+        }};
+        headerBg.Child = headerText;
+        Grid.SetRow(headerBg, 0);
+        grid.Children.Add(headerBg);
+
+        // Message
+        var msgBlock = new TextBlock {{
+            Text = msg,
+            TextWrapping = TextWrapping.Wrap,
+            FontSize = 16,
+            Foreground = new SolidColorBrush(Color.FromRgb(0x2D, 0x37, 0x48)),
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextAlignment = TextAlignment.Center,
+            Margin = new Thickness(30, 25, 30, 10)
+        }};
+        Grid.SetRow(msgBlock, 1);
+        grid.Children.Add(msgBlock);
+
+        // Button
+        var btn = new Button {{
+            Content = "Dismiss",
+            Width = 120,
+            Height = 36,
+            Background = new SolidColorBrush(Color.FromRgb(0x3b, 0x82, 0xf6)),
+            Foreground = Brushes.White,
+            FontWeight = FontWeights.Bold,
+            FontSize = 13,
+            BorderThickness = new Thickness(0),
+            Cursor = System.Windows.Input.Cursors.Hand,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center
+        }};
+        btn.Click += (s, e) => win.Close();
+        Grid.SetRow(btn, 2);
+        grid.Children.Add(btn);
+
+        outerBorder.Child = grid;
+        win.Content = outerBorder;
+        win.ShowDialog();
+    }}
+}}
+"@ -ErrorAction Stop
+
+[ChimeraNotifyWin]::Show("{safe_msg}")
+"""
+
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix='.ps1', delete=False, mode='w', encoding='utf-8') as tf:
+        tf.write(ps_content)
+        temp_path = tf.name
+
+    try:
+        # Use -Sta to ensure WPF STA thread compatibility
+        cmd = ['powershell', '-Sta', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', temp_path]
+
+        def _run():
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            if res.returncode != 0:
+                log('ERROR', f"Notification PowerShell failed (code {res.returncode})")
+                log('DEBUG', f"PS Error: {res.stderr[:500]}")
             else:
-                errors.append(f"{target}: {result.stderr.strip() or 'Failed'}")
-        except Exception as e:
-            errors.append(f"{target}: {str(e)}")
+                log('DEBUG', "Notification PowerShell completed successfully.")
+            try: os.remove(temp_path)
+            except: pass
 
-    if errors:
-        return False, f"Sent to {success_count}. Errors: {', '.join(errors)}"
-    return True, f"Successfully sent to {len(target_users)} target(s)."
+        threading.Thread(target=_run, daemon=True).start()
+        
+        log('INFO', f"✓ Modern notification launched (Session {session_id}): {message[:50]}...")
+        return True, f"Modern notification window launched in Session {session_id}."
+    except Exception as e:
+        log('WARN', f"Failed to launch modern notification: {e}")
+        return False, str(e)
 
 
 # ── Polling / Main ──────────────────────────────────────────────────────────
@@ -819,7 +952,15 @@ def main():
     print(f'║  IP:        {ip_address:<37}║')
     print(f'║  Dry-run:   {"Yes" if dry_run else "No":<37}║')
     print('╚══════════════════════════════════════════════════╝')
-    print()
+    print(f"[*] Agent started. PID: {os.getpid()}")
+    try:
+        import ctypes
+        session_id = ctypes.c_uint32()
+        if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
+             log('INFO', f"Agent Session ID: {session_id.value}")
+    except:
+        pass
+    log('INFO', f"Agent PID: {os.getpid()}")
 
     # ── Register device ─────────────────────────────────────────────────
     log('INFO', 'Collecting system information…')
@@ -901,11 +1042,14 @@ def main():
                 # Execute
                 if action == 'grant':
                     success, output = execute_grant(username, dry_run)
-                    report_result(server, cmd_id, success, output)
+                    # After grant/revoke/create_user, update admin list instantly
+                    _, _, admin_list = execute_check(dry_run)
+                    report_result(server, cmd_id, success, output, admin_list)
 
                 elif action == 'revoke':
                     success, output = execute_revoke(username, dry_run)
-                    report_result(server, cmd_id, success, output)
+                    _, _, admin_list = execute_check(dry_run)
+                    report_result(server, cmd_id, success, output, admin_list)
 
                 elif action == 'check':
                     success, output, admin_list = execute_check(dry_run)
@@ -917,7 +1061,8 @@ def main():
 
                 elif action == 'create_user':
                     success, output = execute_create_user(username, payload, dry_run)
-                    report_result(server, cmd_id, success, output)
+                    _, _, admin_list = execute_check(dry_run)
+                    report_result(server, cmd_id, success, output, admin_list)
 
                 elif action == 'notify':
                     success, output = execute_notify(payload, dry_run)

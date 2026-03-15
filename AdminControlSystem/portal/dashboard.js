@@ -39,8 +39,42 @@ function showResult(type, icon, text) {
 }
 
 function hideResult() {
-    $('resultBox').className = 'result-box';
+    const box = $('resultBox');
+    if (box) box.className = 'result-box';
 }
+
+// ── Utility Functions ──────────────────────────────────────────────────────
+
+function formatDate(dateStr) {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '—';
+    const day   = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year  = d.getFullYear();
+    let hoursNum = d.getHours();
+    const ampm = hoursNum >= 12 ? 'PM' : 'AM';
+    hoursNum = hoursNum % 12 || 12;
+    const hoursStr = String(hoursNum).padStart(2, '0');
+    const mins = String(d.getMinutes()).padStart(2, '0');
+    const secs = String(d.getSeconds()).padStart(2, '0');
+    return `${day}/${month}/${year} ${hoursStr}:${mins}:${secs} ${ampm}`;
+}
+
+function escapeHtml(str) {
+    if (str == null) return '';
+    const d = document.createElement('div');
+    d.textContent = String(str);
+    return d.innerHTML;
+}
+
+function escapeAttr(str) {
+    if (str == null) return '';
+    return String(str).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+
+// Command History cache (for details modal)
+let _historyCache = [];
 
 // ── Toast Notifications ────────────────────────────────────────────────────
 
@@ -106,7 +140,9 @@ async function loadDevices() {
         const now = new Date();
         devices.forEach(d => {
             const lastSeen = new Date(d.last_seen);
-            const isOnline = (now - lastSeen) < 15000; // 15 seconds threshold
+            const diff = now - lastSeen;
+            // Online if seen in last 30s, or seen up to 1 min in the "future" (clock drift)
+            const isOnline = diff < 30000 && diff > -60000; 
             const statusIcon = isOnline ? '🟢' : '🔴';
 
             const opt = document.createElement('option');
@@ -144,39 +180,47 @@ async function loadDevices() {
         // Rebuild notify device list checkboxes
         const notifyList = $('notifyDeviceList');
         if (notifyList) {
-            // Keep track of what was checked previously, default to checked all if empty
             const existingCheckboxes = Array.from(document.querySelectorAll('.notify-target-device:checked')).map(c => c.value);
             const isFirstLoad = document.querySelectorAll('.notify-target-device').length === 0;
 
             let html = `
-                <div style="display:flex; align-items:center; gap:8px; font-weight:bold; margin-bottom:6px; cursor:pointer;" onclick="document.getElementById('notifyTargetAllDevices').click()">
-                    <input type="checkbox" id="notifyTargetAllDevices" value="All" ${isFirstLoad ? 'checked' : ''} onclick="event.stopPropagation()" onchange="document.querySelectorAll('.notify-target-device').forEach(c => c.checked = this.checked); loadNotifyCampaigns();">
-                    <label style="margin:0; padding:0; cursor:pointer; text-transform:none; font-size:13px; font-weight:700; color:var(--text);">Target All Devices</label>
-                </div>
-                <div style="margin-top:8px; padding-left: 24px;">
+                <div class="device-selector-container">
+                    <div class="device-selector-header" onclick="document.getElementById('notifyTargetAllDevices').click()">
+                        <input type="checkbox" id="notifyTargetAllDevices" value="All" ${isFirstLoad ? 'checked' : ''} onclick="event.stopPropagation()" onchange="const cbs=document.querySelectorAll('.notify-target-device'); cbs.forEach(c => c.checked = this.checked); updateNotifyCount(); loadNotifyCampaigns();">
+                        <span style="flex:1">Target All Devices</span>
+                    </div>
+                    <div class="device-selector-list">
             `;
             devices.forEach(d => {
                 const lastSeen = new Date(d.last_seen);
-                const isOnline = (now - lastSeen) < 15000;
+                const isOnline = (now - lastSeen) < 30000;
                 const statusIcon = isOnline ? '🟢' : '🔴';
                 const isChecked = isFirstLoad || existingCheckboxes.includes(d.id.toString());
                 html += `
-                    <div style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px; cursor:pointer;" onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change'));">
-                        <input type="checkbox" class="notify-target-device" value="${d.id}" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation()" onchange="loadNotifyCampaigns();">
-                        <label style="margin:0; padding:0; cursor:pointer; text-transform:none; font-size:13px; font-weight:400; color:var(--text);">${statusIcon} ${d.hostname} (${d.ip_address})</label>
+                    <div class="device-selector-item" onclick="const cb = this.querySelector('input'); cb.checked = !cb.checked; cb.dispatchEvent(new Event('change'));">
+                        <input type="checkbox" class="notify-target-device" value="${d.id}" ${isChecked ? 'checked' : ''} onclick="event.stopPropagation()" onchange="updateNotifyCount(); loadNotifyCampaigns();">
+                        <label>${statusIcon} <strong>${d.hostname}</strong> <span style="color:var(--text-3); font-size:11px; margin-left:4px;">(${d.ip_address})</span></label>
                     </div>
                 `;
             });
-            html += '</div>';
+            html += '</div></div>';
             notifyList.innerHTML = html;
+            updateNotifyCount();
         }
 
-        // Restore selection
+        // ── Helper: Update Notify Selected Count ──────────────────────────────────
+function updateNotifyCount() {
+    const checked = document.querySelectorAll('.notify-target-device:checked').length;
+    const counter = $('notifyTargetCount');
+    if (counter) counter.textContent = checked;
+}
+
+// Restore selection
         if (currentVal) select.value = currentVal;
         if (currentFilterVal && filterSelect) filterSelect.value = currentFilterVal;
         if (currentEvtFilterVal && evtFilterSelect) evtFilterSelect.value = currentEvtFilterVal;
 
-        $('statDevices').textContent = devices.length;
+        if ($('statDevices')) $('statDevices').textContent = devices.length;
 
         // Auto-refresh the System Info Modal silently if it is open
         const modal = $('sysInfoModal');
@@ -711,13 +755,13 @@ async function refreshAdminList() {
                     No admin data yet — click Check Status
                 </div>
             </td></tr>`;
-            $('statAdmins').textContent = '0';
+            if ($('statAdmins')) $('statAdmins').textContent = '0';
             updateCommandButtons();
             return;
         }
 
         currentAdminList = data.admin_users;
-        $('statAdmins').textContent = data.admin_users.length;
+        if ($('statAdmins')) $('statAdmins').textContent = data.admin_users.length;
         updateCommandButtons();
 
         tbody.innerHTML = data.admin_users.map(user => {
@@ -824,6 +868,28 @@ async function loadHistory() {
 
         const data = await api('GET', url);
         const history = data.commands || [];
+        
+        // Auto-refresh detection:
+        // If the current selected device has any commands that just reached 'completed', refresh admin list
+        if (selectedDeviceId) {
+            const completedRecently = history.filter(c => 
+                c.device_id == selectedDeviceId && 
+                c.status === 'completed' &&
+                ['grant', 'revoke', 'check', 'create_user'].includes(c.action)
+            );
+            
+            // If we find completed missions that haven't been "seen" by our current state yet, refresh
+            // We use the ID to avoid double-refreshing within the same poll cycle
+            if (completedRecently.length > 0) {
+                const latestId = Math.max(...completedRecently.map(c => c.id));
+                if (window._lastAutoRefreshId !== latestId) {
+                    window._lastAutoRefreshId = latestId;
+                    console.log(`[Auto-Refresh] Command #${latestId} completed. Refreshing admin list...`);
+                    refreshAdminList();
+                }
+            }
+        }
+
         _historyCache = history; // Cache for details modal
         const total = data.total || 0;
         const page = data.page || 1;
@@ -835,7 +901,7 @@ async function loadHistory() {
             tbody.innerHTML = `<tr><td colspan="7">
                 <div class="empty-state"><span class="icon">📭</span>No commands found</div>
             </td></tr>`;
-            $('statCommands').textContent = '0';
+            if ($('statCommands')) $('statCommands').textContent = '0';
             // Update Pagination UI
             if ($('pageInfoText')) $('pageInfoText').textContent = '0 results';
             if ($('pageIndicator')) $('pageIndicator').textContent = '1';
@@ -845,7 +911,7 @@ async function loadHistory() {
         }
 
         const completedCount = history.filter(c => c.status === 'completed').length;
-        $('statCommands').textContent = completedCount; // NOTE: This is now just the count on THIS page
+        if ($('statCommands')) $('statCommands').textContent = completedCount;
 
         // Update Pagination UI
         const totalPages = Math.ceil(total / limit) || 1;
@@ -1201,9 +1267,7 @@ function escapeHtml(str) {
     return d.innerHTML;
 }
 
-function escapeAttr(str) {
-    return str.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
-}
+
 
 // ── Event Log Details Modal ──────────────────────────────────────────────────
 
@@ -1251,6 +1315,18 @@ function openSysInfoModal() {
     const device = _deviceCache.find(d => d.id == deviceId);
     const hostname = device ? device.hostname : deviceId;
     document.getElementById('sysInfoDeviceName').textContent = hostname;
+    
+    // Set status badge
+    const badgeEl = document.getElementById('sysInfoStatusBadge');
+    if (badgeEl && device) {
+        const diff = Date.now() - new Date(device.last_seen);
+        const isOn = device.last_seen && diff < 30 * 1000 && diff > -60 * 1000;
+        badgeEl.innerHTML = isOn 
+            ? `<span class="badge badge-completed"><span class="badge-dot"></span>Online</span>`
+            : `<span class="badge badge-failed"><span class="badge-dot"></span>Offline</span>`;
+    } else if (badgeEl) {
+        badgeEl.innerHTML = '';
+    }
 
     const modal = document.getElementById('sysInfoModal');
     modal.classList.add('show');
@@ -1265,7 +1341,7 @@ function openSysInfoModal() {
         return;
     }
 
-    renderSysInfo(body, device.system_info);
+    renderSysInfo(body, device.system_info, deviceId);
 }
 
 function closeSysInfoModal(e) {
@@ -1273,7 +1349,7 @@ function closeSysInfoModal(e) {
     document.getElementById('sysInfoModal').classList.remove('show');
 }
 
-function renderSysInfo(container, info) {
+function renderSysInfo(container, info, deviceId) {
     const pct = (v, total) => {
         const p = total > 0 ? Math.min(100, Math.round((v / total) * 100)) : 0;
         const color = p > 85 ? '#ef4444' : p > 60 ? '#f59e0b' : '#10b981';
@@ -1304,8 +1380,8 @@ function renderSysInfo(container, info) {
         const blIcon = isEncrypted ? '🔒' : '🔓';
 
         const keyBtn = isEncrypted ? 
-            `<button class="btn btn-sm" style="margin-top:10px; width:100%; justify-content:center; background:var(--bg-tertiary); border:1px solid var(--accent); color:var(--accent-light);" 
-                     onclick="getBitLockerKey('${selectedDeviceId}', '${d.drive}')">🔑 Get Recovery Key</button>` : '';
+            `<button class="btn btn-sm" style="margin-top:10px; width:100%; justify-content:center; background:var(--bg); border:1px solid var(--accent); color:var(--accent); font-weight:700;" 
+                     onclick="getBitLockerKey('${deviceId}', '${escapeAttr(d.drive)}')">🔑 Get Recovery Key</button>` : '';
 
         return `
         <div class="sysinfo-card full-width">
@@ -1368,33 +1444,54 @@ function renderSysInfo(container, info) {
 }
 
 async function getBitLockerKey(deviceId, driveLetter) {
-    const cachedDevice = _deviceCache.find(d => d.id === deviceId);
-    if (!cachedDevice || !cachedDevice.system_info) {
-        toast('Device data not available', 'error');
-        return;
-    }
-
     try {
+        console.log(`[getBitLockerKey] Fetching key for Device ID: ${deviceId}, Drive: ${driveLetter}`);
+
+        // Fallback to selectedDeviceId if deviceId is missing or "undefined" string
+        const targetId = (deviceId && deviceId !== 'undefined') ? deviceId : selectedDeviceId;
+
+        if (!targetId) {
+            toast('No device context found. Please re-select the device.', 'error');
+            return;
+        }
+
+        const cachedDevice = _deviceCache.find(d => d.id == targetId);
+        if (!cachedDevice || !cachedDevice.system_info) {
+            console.error('[getBitLockerKey] Device not found in cache for ID:', targetId);
+            toast('Device data not available in cache. Try clicking Refresh.', 'error');
+            return;
+        }
+
         const info = typeof cachedDevice.system_info === 'string' ? JSON.parse(cachedDevice.system_info) : cachedDevice.system_info;
         const disks = Array.isArray(info.disks) ? info.disks : (info.disks ? [info.disks] : []);
         const targetDisk = disks.find(d => d.drive === driveLetter);
 
         if (!targetDisk) {
-            toast(`Drive ${driveLetter} not found`, 'error');
+            toast(`Drive ${driveLetter} not found on this device`, 'error');
             return;
         }
 
         const recoveryKey = targetDisk.recovery_key;
-        if (!recoveryKey || recoveryKey === 'Not Encrypted') {
-            toast(`Drive ${driveLetter} is not encrypted`, 'info');
-        } else if (recoveryKey === 'Not found' || recoveryKey.startsWith('Failed') || recoveryKey.includes('Key not found')) {
-            toast(`Key not yet synced. The agent is fetching it in the background.`, 'warning');
+        if (!recoveryKey || recoveryKey === 'Not Encrypted' || recoveryKey === 'Not encrypted') {
+            toast(`Drive ${driveLetter} is not BitLocker encrypted`, 'info');
+        } else if (recoveryKey === 'Not found' || recoveryKey.startsWith('Failed') || (typeof recoveryKey === 'string' && recoveryKey.includes('Key not found'))) {
+            toast(`Key not yet synced. The agent is fetching it.`, 'warning');
         } else {
-            alert(`🔑 BitLocker Recovery Key\n\nDevice: ${cachedDevice.hostname}\nDrive: ${driveLetter}\n\nKey: ${recoveryKey}`);
+            // Populate and show custom modal
+            document.getElementById('bkModalDevice').textContent = cachedDevice.hostname;
+            document.getElementById('bkModalDrive').textContent = driveLetter;
+            document.getElementById('bkModalKey').textContent = recoveryKey;
+            
+            document.getElementById('bitlockerKeyModal').classList.add('show');
         }
     } catch (e) {
+        console.error('[getBitLockerKey] Error:', e);
         toast('Error reading key data', 'error');
     }
+}
+
+function closeBitLockerKeyModal() {
+    document.getElementById('bitlockerKeyModal').classList.remove('show');
 }
 
 async function getBitLockerKeyStandalone() {
@@ -1410,14 +1507,46 @@ async function getBitLockerKeyStandalone() {
     driveInput.value = '';
 }
 
+// ── Dashboard Data ─────────────────────────────────────────────────────────
+
+async function fetchAllCommandsForDashboard() {
+    try {
+        const data = await api('GET', '/commands/history?limit=10000');
+        window._allCommands = data.commands || [];
+        if (typeof window.onDashboardDataLoaded === 'function') window.onDashboardDataLoaded();
+    } catch (e) {
+        console.error('fetchAllCommandsForDashboard error:', e);
+    }
+}
+
+async function fetchAllAdminsCount() {
+    try {
+        const devices = window._allDevices || [];
+        let count = 0;
+        for (const d of devices) {
+            const data = await api('GET', `/admin_list/${d.id}`);
+            if (data && data.admin_users) {
+                count += data.admin_users.length;
+            }
+        }
+        if (document.getElementById('dash-active-admins')) {
+            document.getElementById('dash-active-admins').textContent = count;
+        }
+    } catch (e) {
+        console.error('fetchAllAdminsCount error', e);
+    }
+}
+
 // ── Polling ────────────────────────────────────────────────────────────────
 
 async function pollAll() {
     await loadDevices();
+    await fetchAllCommandsForDashboard();
     await loadHistory();
     await loadEventLogs();
     await loadEventLogSummary();
     await loadNotifyCampaigns();
+    await fetchAllAdminsCount();
     if (selectedDeviceId) await refreshAdminList();
 }
 
