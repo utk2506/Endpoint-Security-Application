@@ -26,10 +26,11 @@ body {
     font-family: 'Open Sans', sans-serif;
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
+    height: 100vh;
+    width: 100vw;
     display: flex;
     flex-direction: column;
-    overflow-x: hidden;
+    overflow: hidden;
 }
 
 /* ── Alert Banner ── */
@@ -41,7 +42,6 @@ body {
     padding: 7px 48px 7px 16px;
     text-align: center;
     position: relative;
-    z-index: 100;
     flex-shrink: 0;
 }
 .top-banner a { color: #fff; text-decoration: underline; }
@@ -59,7 +59,6 @@ body {
     padding: 0 16px;
     height: 48px;
     flex-shrink: 0;
-    z-index: 90;
 }
 .toolbar-logo img { height: 30px; background: white; padding: 4px 8px; border-radius: 4px; }
 .toolbar-right { display: flex; align-items: center; gap: 12px; }
@@ -86,6 +85,7 @@ body {
     flex-direction: column;
     flex-shrink: 0;
     overflow-y: auto;
+    height: 100%;
 }
 .sidebar-section { padding: 18px 0 6px; }
 .sidebar-section-label {
@@ -112,10 +112,12 @@ body {
 .main {
     flex: 1;
     overflow-y: auto;
+    overflow-x: hidden;
     padding: 20px 24px 40px;
     display: flex;
     flex-direction: column;
     gap: 0;
+    height: 100%;
 }
 
 /* ── Page Header ── */
@@ -127,8 +129,8 @@ body {
 .page-actions { display: flex; gap: 8px; align-items: center; }
 
 /* ── View panels ── */
-.view { display: none; }
-.view.active { display: block; }
+.view { display: none !important; }
+.view.active { display: block !important; }
 
 /* ── Widget Grid ── */
 .widget-row {
