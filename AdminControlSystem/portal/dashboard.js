@@ -1364,6 +1364,32 @@ async function getBitLockerKey(deviceId, driveLetter) {
     }
 }
 
+async function getBitLockerKeyStandalone() {
+    const deviceId = selectedDeviceId || $('deviceSelect')?.value;
+    if (!deviceId) { toast('Select a target device first', 'error'); return; }
+
+    const driveInput = $('bitlockerDrive');
+    let drive = (driveInput?.value || '').trim().toUpperCase();
+    if (!drive) { toast('Enter a drive letter (e.g. C:)', 'error'); return; }
+    if (drive.length === 1) drive += ':';
+
+    if (!confirm(`Retrieve BitLocker Recovery Key for ${drive} on this device?\n\nThis action will be logged.`)) return;
+
+    try {
+        await api('POST', '/send_command', {
+            device_id: deviceId,
+            action: 'get_bitlocker_key',
+            payload: drive
+        });
+        toast(`Recovery key request sent for ${drive}`, 'success');
+        driveInput.value = '';
+        showSection('cmd-history');
+        setTimeout(() => loadHistory(), 1000);
+    } catch (e) {
+        toast(e.message || 'Failed to send recovery key request', 'error');
+    }
+}
+
 // ── Polling ────────────────────────────────────────────────────────────────
 
 async function pollAll() {

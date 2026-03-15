@@ -869,6 +869,28 @@
                     <span id="resultIcon"></span>
                     <span id="resultText"></span>
                 </div>
+
+                <!-- BitLocker Recovery Key -->
+                <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border);">
+                    <div style="font-weight: 600; font-size: 13px; color: var(--text-primary); margin-bottom: 10px; display: flex; align-items: center; gap: 6px;">
+                        🔐 BitLocker Recovery Key
+                    </div>
+                    <div class="form-row" style="gap: 8px; align-items: flex-end;">
+                        <div style="flex: 1;">
+                            <label for="bitlockerDrive" style="font-size: 11px;">Drive Letter</label>
+                            <input type="text" id="bitlockerDrive" placeholder="e.g. C:" maxlength="3"
+                                style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px;
+                                       color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;">
+                        </div>
+                        <button class="btn" onclick="getBitLockerKeyStandalone()" 
+                            style="background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; white-space: nowrap; padding: 10px 16px;">
+                            🔑 Get Recovery Key
+                        </button>
+                    </div>
+                    <p style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
+                        Enter the drive letter of the selected device to retrieve its BitLocker recovery key. Result appears in Command History.
+                    </p>
+                </div>
             </div>
 
             <!-- Current Admins -->
