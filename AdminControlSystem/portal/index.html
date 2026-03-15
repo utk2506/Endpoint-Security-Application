@@ -10,676 +10,8 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" />
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <style>
-        /* ── Reset & Variables ──────────────────────────────────────────── */
-        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
-        :root {
-            --bg-primary: #0b0e17;
-            --bg-secondary: #111827;
-            --bg-card: rgba(17, 24, 39, 0.65);
-            --bg-card-hover: rgba(30, 41, 59, 0.7);
-            --border: rgba(99, 102, 241, 0.15);
-            --border-glow: rgba(99, 102, 241, 0.4);
-            --text-primary: #f1f5f9;
-            --text-secondary: #94a3b8;
-            --text-muted: #64748b;
-            --accent: #6366f1;
-            --accent-light: #818cf8;
-            --accent-glow: rgba(99, 102, 241, 0.25);
-            --success: #10b981;
-            --success-bg: rgba(16, 185, 129, 0.12);
-            --danger: #ef4444;
-            --danger-bg: rgba(239, 68, 68, 0.12);
-            --warning: #f59e0b;
-            --warning-bg: rgba(245, 158, 11, 0.12);
-            --radius: 14px;
-            --radius-sm: 8px;
-            --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-            --transition: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-
-        body {
-            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            min-height: 100vh;
-            overflow-x: hidden;
-        }
-
-        /* ── Animated Background ───────────────────────────────────────── */
-        body::before {
-            content: '';
-            position: fixed;
-            inset: 0;
-            background:
-                radial-gradient(ellipse 600px 400px at 20% 10%, rgba(99,102,241,0.08) 0%, transparent 70%),
-                radial-gradient(ellipse 500px 500px at 80% 80%, rgba(16,185,129,0.06) 0%, transparent 70%);
-            pointer-events: none;
-            z-index: 0;
-        }
-
-        /* ── Layout ────────────────────────────────────────────────────── */
-        .app-wrapper {
-            position: relative;
-            z-index: 1;
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 32px 24px 60px;
-        }
-
-        /* ── Header ────────────────────────────────────────────────────── */
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-        }
-
-        .header-logo {
-            display: inline-flex;
-            align-items: center;
-            gap: 14px;
-            margin-bottom: 8px;
-        }
-
-        .header-icon {
-            width: 48px;
-            height: 48px;
-            background: linear-gradient(135deg, var(--accent), #a78bfa);
-            border-radius: 14px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 24px;
-            box-shadow: 0 0 24px var(--accent-glow);
-        }
-
-        .header h1 {
-            font-size: 28px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--text-primary), var(--accent-light));
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-            letter-spacing: -0.5px;
-        }
-
-        .header p {
-            color: var(--text-secondary);
-            font-size: 14px;
-            margin-top: 4px;
-        }
-
-        /* ── Glass Card ────────────────────────────────────────────────── */
-        .card {
-            background: var(--bg-card);
-            backdrop-filter: blur(20px);
-            -webkit-backdrop-filter: blur(20px);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 28px;
-            box-shadow: var(--shadow);
-            transition: border-color var(--transition);
-        }
-
-        .card:hover {
-            border-color: var(--border-glow);
-        }
-
-        .card-title {
-            font-size: 16px;
-            font-weight: 700;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .card-title .icon {
-            font-size: 18px;
-        }
-
-        /* ── Grid ──────────────────────────────────────────────────────── */
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 24px;
-            margin-bottom: 24px;
-        }
-
-        .full-width {
-            margin-bottom: 24px;
-        }
-
-        @media (max-width: 768px) {
-            .grid-2 { grid-template-columns: 1fr; }
-        }
-
-        /* ── Form Controls ─────────────────────────────────────────────── */
-        label {
-            display: block;
-            font-size: 13px;
-            font-weight: 500;
-            color: var(--text-secondary);
-            margin-bottom: 6px;
-        }
-
-        select, input[type="text"], textarea {
-            width: 100%;
-            padding: 12px 16px;
-            background: var(--bg-secondary);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            color: var(--text-primary);
-            font-family: inherit;
-            font-size: 14px;
-            outline: none;
-            transition: border-color var(--transition), box-shadow var(--transition);
-        }
-
-        select:focus, input[type="text"]:focus, textarea:focus {
-            border-color: var(--accent);
-            box-shadow: 0 0 0 3px var(--accent-glow);
-        }
-
-        select option {
-            background: var(--bg-secondary);
-        }
-
-        .form-row {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .form-row > * { flex: 1; }
-
-        /* ── Buttons ───────────────────────────────────────────────────── */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 11px 22px;
-            border: none;
-            border-radius: var(--radius-sm);
-            font-family: inherit;
-            font-size: 13px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all var(--transition);
-            white-space: nowrap;
-        }
-
-        .btn:active { transform: scale(0.97); }
-
-        .btn-primary {
-            background: linear-gradient(135deg, var(--accent), #7c3aed);
-            color: #fff;
-            box-shadow: 0 4px 14px var(--accent-glow);
-        }
-
-        .btn-primary:hover {
-            box-shadow: 0 6px 20px rgba(99,102,241,0.4);
-            transform: translateY(-1px);
-        }
-
-        .btn-success {
-            background: linear-gradient(135deg, var(--success), #059669);
-            color: #fff;
-            box-shadow: 0 4px 14px rgba(16,185,129,0.2);
-        }
-
-        .btn-success:hover {
-            box-shadow: 0 6px 20px rgba(16,185,129,0.35);
-            transform: translateY(-1px);
-        }
-
-        .btn-danger {
-            background: linear-gradient(135deg, var(--danger), #dc2626);
-            color: #fff;
-            box-shadow: 0 4px 14px rgba(239,68,68,0.2);
-        }
-
-        .btn-danger:hover {
-            box-shadow: 0 6px 20px rgba(239,68,68,0.35);
-            transform: translateY(-1px);
-        }
-
-        .btn-outline {
-            background: transparent;
-            border: 1px solid var(--border);
-            color: var(--text-secondary);
-        }
-
-        .btn-outline:hover {
-            border-color: var(--accent);
-            color: var(--accent-light);
-            background: var(--accent-glow);
-        }
-
-        .btn-group {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-
-        /* ── Status Badge ──────────────────────────────────────────────── */
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            letter-spacing: 0.3px;
-        }
-
-        .badge-admin {
-            background: var(--danger-bg);
-            color: var(--danger);
-            border: 1px solid rgba(239,68,68,0.2);
-        }
-
-        .badge-standard {
-            background: var(--success-bg);
-            color: var(--success);
-            border: 1px solid rgba(16,185,129,0.2);
-        }
-
-        .badge-pending {
-            background: var(--warning-bg);
-            color: var(--warning);
-            border: 1px solid rgba(245,158,11,0.2);
-        }
-
-        .badge-completed {
-            background: var(--success-bg);
-            color: var(--success);
-            border: 1px solid rgba(16,185,129,0.2);
-        }
-
-        .badge-failed {
-            background: var(--danger-bg);
-            color: var(--danger);
-            border: 1px solid rgba(239,68,68,0.2);
-        }
-
-        .badge-executing {
-            background: rgba(99,102,241,0.12);
-            color: var(--accent-light);
-            border: 1px solid rgba(99,102,241,0.2);
-        }
-
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: currentColor;
-        }
-
-        .badge-executing .badge-dot {
-            animation: pulse-dot 1.4s infinite;
-        }
-
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.3; }
-        }
-
-        /* ── Table ─────────────────────────────────────────────────────── */
-        .table-wrap {
-            overflow-x: auto;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-
-        thead th {
-            text-align: left;
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            color: var(--text-muted);
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        tbody td {
-            padding: 12px 14px;
-            font-size: 13px;
-            color: var(--text-secondary);
-            border-bottom: 1px solid rgba(99,102,241,0.05);
-        }
-
-        tbody tr {
-            transition: background var(--transition);
-        }
-
-        tbody tr:hover {
-            background: rgba(99,102,241,0.04);
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-muted);
-            font-size: 14px;
-        }
-
-        .empty-state .icon {
-            font-size: 32px;
-            margin-bottom: 10px;
-            display: block;
-        }
-
-        /* ── Result Box ────────────────────────────────────────────────── */
-        .result-box {
-            margin-top: 16px;
-            padding: 16px 20px;
-            border-radius: var(--radius-sm);
-            font-size: 14px;
-            font-weight: 500;
-            display: none;
-            align-items: center;
-            gap: 10px;
-            animation: fadeSlideIn 0.3s ease;
-        }
-
-        .result-box.show { display: flex; }
-
-        .result-box.info {
-            background: rgba(99,102,241,0.1);
-            border: 1px solid rgba(99,102,241,0.2);
-            color: var(--accent-light);
-        }
-
-        .result-box.success {
-            background: var(--success-bg);
-            border: 1px solid rgba(16,185,129,0.2);
-            color: var(--success);
-        }
-
-        .result-box.error {
-            background: var(--danger-bg);
-            border: 1px solid rgba(239,68,68,0.2);
-            color: var(--danger);
-        }
-
-        /* ── Toast ─────────────────────────────────────────────────────── */
-        .toast-container {
-            position: fixed;
-            top: 24px;
-            right: 24px;
-            z-index: 9999;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .toast {
-            padding: 14px 22px;
-            border-radius: var(--radius-sm);
-            font-size: 13px;
-            font-weight: 500;
-            backdrop-filter: blur(16px);
-            animation: toastIn 0.35s ease;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            box-shadow: 0 8px 24px rgba(0,0,0,0.35);
-        }
-
-        .toast.success {
-            background: rgba(16,185,129,0.15);
-            border: 1px solid rgba(16,185,129,0.25);
-            color: var(--success);
-        }
-
-        .toast.error {
-            background: rgba(239,68,68,0.15);
-            border: 1px solid rgba(239,68,68,0.25);
-            color: var(--danger);
-        }
-
-        .toast.info {
-            background: rgba(99,102,241,0.15);
-            border: 1px solid rgba(99,102,241,0.25);
-            color: var(--accent-light);
-        }
-
-        .toast-exit {
-            animation: toastOut 0.3s ease forwards;
-        }
-
-        @keyframes toastIn {
-            from { opacity: 0; transform: translateX(40px); }
-            to { opacity: 1; transform: translateX(0); }
-        }
-
-        @keyframes toastOut {
-            from { opacity: 1; transform: translateX(0); }
-            to { opacity: 0; transform: translateX(40px); }
-        }
-
-        @keyframes fadeSlideIn {
-            from { opacity: 0; transform: translateY(-6px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        /* ── Connection Indicator ──────────────────────────────────────── */
-        .connection-bar {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 8px;
-            font-size: 12px;
-            font-weight: 500;
-            color: var(--text-muted);
-            margin-bottom: 24px;
-        }
-
-        .connection-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: var(--success);
-            box-shadow: 0 0 8px rgba(16,185,129,0.5);
-        }
-
-        .connection-dot.offline {
-            background: var(--danger);
-            box-shadow: 0 0 8px rgba(239,68,68,0.5);
-        }
-
-        /* ── Stats Bar ─────────────────────────────────────────────────── */
-        .stats-bar {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-
-        .stat-card {
-            background: var(--bg-card);
-            backdrop-filter: blur(16px);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 20px;
-            text-align: center;
-            transition: border-color var(--transition);
-        }
-
-        .stat-card:hover {
-            border-color: var(--border-glow);
-        }
-
-        .stat-value {
-            font-size: 32px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--accent-light), #a78bfa);
-            -webkit-background-clip: text;
-            background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .stat-label {
-            font-size: 12px;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            margin-top: 4px;
-        }
-
-        @media (max-width: 768px) {
-            .stats-bar { grid-template-columns: 1fr; }
-        }
-
-        /* ── Scrollbar ─────────────────────────────────────────────────── */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
-
-        /* ── Modal for Terminal ────────────────────────────────────────── */
-        .modal-overlay {
-            position: fixed;
-            inset: 0;
-            background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(5px);
-            z-index: 10000;
-            display: none;
-            align-items: center;
-            justify-content: center;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-        }
-
-        .modal-overlay.show {
-            display: flex;
-            opacity: 1;
-        }
-
-        .terminal-modal {
-            background: #000;
-            width: 90vw;
-            height: 80vh;
-            border-radius: var(--radius-sm);
-            border: 1px solid var(--border);
-            display: flex;
-            flex-direction: column;
-            box-shadow: 0 20px 50px rgba(0,0,0,0.8);
-            overflow: hidden;
-        }
-
-        .terminal-header {
-            background: var(--bg-secondary);
-            padding: 12px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .terminal-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .close-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-secondary);
-            font-size: 20px;
-            cursor: pointer;
-            transition: color 0.2s;
-        }
-
-        /* ── System Info Modal ────────────────────────────────────────── */
-        .sysinfo-modal {
-            background: var(--bg-secondary);
-            width: 800px;
-            max-width: 95vw;
-            max-height: 90vh;
-            border-radius: var(--radius);
-            border: 1px solid var(--border-glow);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            box-shadow: 0 0 60px rgba(99, 102, 241, 0.3);
-            animation: slideUp 0.3s ease;
-        }
-        .sysinfo-header {
-            background: linear-gradient(135deg, #1e1b4b, #1a1f35);
-            padding: 16px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid var(--border-glow);
-        }
-        .sysinfo-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .sysinfo-body {
-            padding: 20px;
-            overflow-y: auto;
-            flex: 1;
-        }
-        .sysinfo-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 14px;
-        }
-        .sysinfo-card {
-            background: rgba(99, 102, 241, 0.06);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-sm);
-            padding: 14px 16px;
-        }
-        .sysinfo-card-title {
-            font-size: 11px;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: var(--accent-light);
-            margin-bottom: 10px;
-        }
-        .sysinfo-row {
-            display: flex;
-            justify-content: space-between;
-            font-size: 13px;
-            padding: 4px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.04);
-        }
-        .sysinfo-row:last-child { border-bottom: none; }
-        .sysinfo-label { color: var(--text-secondary); }
-        .sysinfo-value { color: var(--text-primary); font-weight: 500; text-align: right; max-width: 55%; word-break: break-word; }
-        .sysinfo-bar-wrap { margin-top: 6px; }
-        .sysinfo-bar-track { background: rgba(255,255,255,0.08); border-radius: 999px; height: 6px; overflow: hidden; }
-        .sysinfo-bar-fill { height: 100%; border-radius: 999px; transition: width 0.6s ease; }
-        .sysinfo-card.full-width { grid-column: 1 / -1; }
-
-        .close-btn:hover { color: var(--danger); }
-
-        .terminal-body {
-            flex: 1;
-            padding: 10px;
-            overflow: hidden;
-        }
-    </style>
+    <link rel="stylesheet" href="/portal/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js"></script>
 </head>
 <body>
     <!-- Terminal Modal -->
@@ -758,39 +90,50 @@
         </div>
     </div>
 
-    <!-- Create User Modal -->
-    <div class="modal-overlay" id="createUserModal" onclick="closeCreateUserModal(event)">
-        <div class="shell-modal" style="max-width:400px; padding:24px;" onclick="event.stopPropagation()">
-            <div class="card-title"><span class="icon">👤</span> Create New Local User</div>
-            <p style="color:var(--text-secondary); font-size:12px; margin-bottom:16px;">
-                This will create a brand new <b>Standard User</b> account on the remote device.
-            </p>
-            <div style="margin-bottom:12px;">
-                <label>Username</label>
-                <input type="text" id="newUserName" placeholder="e.g. TestUser" style="background:var(--surface);">
-            </div>
-            <div style="margin-bottom:20px;">
-                <label>Password</label>
-                <input type="password" id="newUserPass" placeholder="••••••••" style="background:var(--surface);">
-            </div>
-            <div class="btn-group">
-                <button class="btn btn-primary" onclick="submitCreateUser()">Create User</button>
-                <button class="btn btn-outline" onclick="closeCreateUserModal()">Cancel</button>
-            </div>
-        </div>
-    </div>
+    <!-- (Create User Modal is below, near end of file) -->
 
     <div class="toast-container" id="toastContainer"></div>
 
-    <div class="app-wrapper">
-        <!-- Header -->
-        <header class="header">
-            <div class="header-logo">
-                <div class="header-icon">🛡️</div>
-                <h1>Admin Control System</h1>
+    <!-- Top Alert Banner -->
+    <div class="top-banner" id="topBanner">
+        <span>⚠ Please complete the migration of your Endpoint clients by September 25th. For more information, please refer to <a href="#">sk102404</a></span>
+        <button onclick="document.getElementById('topBanner').style.display='none'" style="position:absolute; right:16px; background:none; border:none; color:white; font-size:16px; cursor:pointer;">&times;</button>
+    </div>
+    
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <div class="toolbar-logo">
+            <img src="/portal/chimera_logo.png" alt="Chimera Technologies" style="height: 36px; object-fit: contain; border-radius: 4px;">
+        </div>
+        <div style="font-size: 13px; color: #94a3b8; display:flex; align-items:center; gap: 16px;">
+            <span id="toolbarConnStatus" style="font-size:12px;">Admin Control System</span>
+            <span style="display:inline-block; width:30px; height:30px; background:rgba(255,255,255,0.1); border-radius:50%; color:#fff; text-align:center; line-height:30px; font-weight:700; font-size:14px;">IT</span>
+        </div>
+    </div>
+
+    <!-- App Container with Sidebar -->
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <ul class="sidebar-menu">
+                <li class="sidebar-item active">📊 Unified Dashboard</li>
+                <li class="sidebar-item">🛡️ Policy</li>
+                <li class="sidebar-item">💻 Asset Management</li>
+                <li class="sidebar-item">📜 Logs / Event History</li>
+                <li class="sidebar-item">⚡ Push Operations</li>
+            </ul>
+        </aside>
+
+        <div class="app-wrapper">
+            <div class="dashboard-header">
+                <div class="dashboard-title">Unified Dashboard</div>
+                <div style="display:flex; gap: 8px;">
+                    <button class="customize-toggle" id="btnCustomize" onclick="toggleCustomizeDashboard()">
+                        ⚙️ Customize
+                    </button>
+                    <button class="btn btn-outline" style="padding: 6px 12px; height: 32px;" onclick="window.location.reload()">↻</button>
+                </div>
             </div>
-            <p>Centralized Temporary Administrator Access Management</p>
-        </header>
 
         <!-- Connection Status -->
         <div class="connection-bar">
@@ -799,25 +142,26 @@
         </div>
 
         <!-- Stats Bar -->
-        <div class="stats-bar">
+        <div class="stats-bar" id="statsBar">
             <div class="stat-card">
                 <div class="stat-value" id="statDevices">0</div>
-                <div class="stat-label">Devices</div>
+                <div class="stat-label">Endpoints</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="statAdmins">0</div>
-                <div class="stat-label">Active Admins</div>
+                <div class="stat-label">Active Administrators</div>
             </div>
             <div class="stat-card">
                 <div class="stat-value" id="statCommands">0</div>
-                <div class="stat-label">Commands Executed</div>
+                <div class="stat-label">Operations Executed</div>
             </div>
         </div>
 
-        <!-- Command Panel + Admin List -->
-        <div class="grid-2">
+        <!-- Dashboard Grid (Sortable) -->
+        <div class="dashboard-grid" id="dashboardGrid">
             <!-- Command Panel -->
-            <div class="card" id="commandPanel">
+            <div class="card" id="commandPanel" data-widget="commandPanel">
+                <span class="drag-handle" title="Drag to rearrange">⠿</span>
                 <div class="card-title"><span class="icon">⚡</span> Command Panel</div>
 
                 <div style="margin-bottom: 14px;">
@@ -902,7 +246,8 @@
             </div>
 
             <!-- Current Admins -->
-            <div class="card">
+            <div class="card" data-widget="adminList">
+                <span class="drag-handle" title="Drag to rearrange">⠿</span>
                 <div class="card-title">
                     <span class="icon">👥</span> Admin Users on Device
                     <button class="btn btn-outline" style="margin-left:auto; padding:6px 14px; font-size:12px;" onclick="refreshAdminList()">↻ Refresh</button>
@@ -929,10 +274,9 @@
                     </table>
                 </div>
             </div>
-        </div>
-
         <!-- Remote Shell -->
-        <div class="card full-width" id="shellPanel">
+        <div class="card full-width" id="shellPanel" data-widget="shellPanel">
+            <span class="drag-handle" title="Drag to rearrange">⠿</span>
             <div class="card-title"><span class="icon">💻</span> Remote Shell Executer</div>
             <p style="color:var(--text-secondary); font-size:13px; margin-bottom:14px;">
                 Execute PowerShell scripts directly on the selected device. Note: Runs with local system/admin rights.
@@ -951,7 +295,8 @@
         </div>
 
         <!-- Remote Notifications -->
-        <div class="card full-width" id="notifyPanel">
+        <div class="card full-width" id="notifyPanel" data-widget="notifyPanel">
+            <span class="drag-handle" title="Drag to rearrange">⠿</span>
             <div class="card-title"><span class="icon">📢</span> Remote User Notifications</div>
             <p style="color:var(--text-secondary); font-size:13px; margin-bottom:14px;">
                 Send Windows pop-up messages to any device. Choose a target device, write your message, and send once or schedule recurring reminders.
@@ -1034,7 +379,8 @@
         </div>
 
         <!-- Command History -->
-        <div class="card full-width">
+        <div class="card full-width" data-widget="cmdHistory">
+            <span class="drag-handle" title="Drag to rearrange">⠿</span>
             <div class="card-title"><span class="icon">📜</span> Command History</div>
             
             <!-- Search & Filters -->
@@ -1153,7 +499,8 @@
         </div>
 
         <!-- Event Logs Table -->
-        <div class="card full-width">
+        <div class="card full-width" data-widget="eventLogs">
+            <span class="drag-handle" title="Drag to rearrange">⠿</span>
             <div class="card-title"><span class="icon">🔍</span> Event Log History</div>
 
             <!-- Filters -->
@@ -1231,31 +578,77 @@
                 </div>
             </div>
         </div>
-    </div>
+    </div><!-- /app-wrapper -->
+    </div><!-- /app-container -->
 
     <!-- Create User Modal -->
-    <div class="modal-overlay" id="createUserModal" onclick="if(event.target === this) closeCreateUserModal()">
-        <div class="modal">
-            <div class="modal-header">
-                <h3>➕ Create New Local User</h3>
+    <div class="modal-overlay" id="createUserModal" onclick="if(event.target===this) closeCreateUserModal()">
+        <div class="shell-modal" style="max-width:420px; width:90%; padding:0;" onclick="event.stopPropagation()">
+            <div class="terminal-header">
+                <div class="terminal-title">👤 Create New Local User</div>
                 <button class="close-btn" onclick="closeCreateUserModal()">×</button>
             </div>
-            <div class="sys-info-section" style="padding: 24px;">
-                <div style="margin-bottom: 16px;">
+            <div style="padding:24px;">
+                <p style="color:var(--text-secondary); font-size:13px; margin-bottom:20px;">Creates a new <strong>Standard User</strong> account on the selected remote device.</p>
+                <div style="margin-bottom:16px;">
                     <label>Username</label>
-                    <input type="text" id="newUserName" placeholder="Enter new username" style="width:100%; padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:var(--background); color:white; font-size:14px; margin-top:6px;">
+                    <input type="text" id="newUserName" placeholder="e.g. TestUser">
                 </div>
-                <div style="margin-bottom: 24px;">
+                <div style="margin-bottom:24px;">
                     <label>Password</label>
-                    <input type="password" id="newUserPass" placeholder="Enter new user password" style="width:100%; padding:10px 14px; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:var(--background); color:white; font-size:14px; margin-top:6px;">
+                    <input type="password" id="newUserPass" placeholder="••••••••">
                 </div>
-                <button class="btn btn-success" style="width:100%; justify-content:center;" onclick="submitCreateUser()">
-                    ✅ Create User on Device
-                </button>
+                <div class="btn-group" style="margin-top:0;">
+                    <button class="btn btn-primary" style="flex:1; justify-content:center;" onclick="submitCreateUser()">✅ Create User</button>
+                    <button class="btn btn-outline" onclick="closeCreateUserModal()">Cancel</button>
+                </div>
             </div>
         </div>
     </div>
 
     <script src="/portal/dashboard.js"></script>
+    <script>
+        // ── SortableJS Dashboard Customization ──────────────────────────
+        let _sortable = null;
+        function toggleCustomizeDashboard() {
+            const grid = document.getElementById('dashboardGrid');
+            const isEditing = grid.classList.toggle('editing');
+            const btn = document.getElementById('btnCustomize');
+            if (isEditing) {
+                btn.innerHTML = '✅ Done';
+                btn.style.background = '#dcfce7';
+                btn.style.borderColor = '#16a34a';
+                btn.style.color = '#16a34a';
+                _sortable = new Sortable(grid, {
+                    animation: 180,
+                    ghostClass: 'sortable-ghost',
+                    dragClass: 'sortable-drag',
+                    handle: '.drag-handle',
+                    onEnd: saveLayout
+                });
+            } else {
+                btn.innerHTML = '⚙️ Customize';
+                btn.style = '';
+                if (_sortable) { _sortable.destroy(); _sortable = null; }
+            }
+        }
+        function saveLayout() {
+            const grid = document.getElementById('dashboardGrid');
+            const order = [...grid.children].map(c => c.dataset.widget).filter(Boolean);
+            try { localStorage.setItem('dashboardOrder', JSON.stringify(order)); } catch(e) {}
+        }
+        function restoreLayout() {
+            try {
+                const order = JSON.parse(localStorage.getItem('dashboardOrder') || '[]');
+                if (!order.length) return;
+                const grid = document.getElementById('dashboardGrid');
+                order.forEach(id => {
+                    const el = grid.querySelector('[data-widget="' + id + '"]');
+                    if (el) grid.appendChild(el);
+                });
+            } catch(e) {}
+        }
+        document.addEventListener('DOMContentLoaded', restoreLayout);
+    </script>
 </body>
 </html>
