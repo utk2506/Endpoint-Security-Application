@@ -876,19 +876,27 @@
                         🔐 BitLocker Recovery Key
                     </div>
                     <div class="form-row" style="gap: 8px; align-items: flex-end;">
+                        <div style="flex: 2;">
+                            <label for="bitlockerDevice" style="font-size: 11px;">Target Device</label>
+                            <select id="bitlockerDevice"
+                                style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px;
+                                       color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;">
+                                <option value="">— Select a device —</option>
+                            </select>
+                        </div>
                         <div style="flex: 1;">
                             <label for="bitlockerDrive" style="font-size: 11px;">Drive Letter</label>
                             <input type="text" id="bitlockerDrive" placeholder="e.g. C:" maxlength="3"
                                 style="background:var(--surface); border:1px solid rgba(255,255,255,0.1); border-radius:8px;
                                        color:var(--text-primary); padding:10px 14px; font-size:13px; width:100%; box-sizing:border-box;">
                         </div>
-                        <button class="btn" onclick="getBitLockerKeyStandalone()" 
-                            style="background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; white-space: nowrap; padding: 10px 16px;">
-                            🔑 Get Recovery Key
-                        </button>
                     </div>
+                    <button class="btn" onclick="getBitLockerKeyStandalone()" 
+                        style="margin-top:10px; width:100%; justify-content:center; background: linear-gradient(135deg, #6366f1, #8b5cf6); color: white; padding: 10px 16px;">
+                        🔑 Get Recovery Key
+                    </button>
                     <p style="font-size: 11px; color: var(--text-muted); margin-top: 6px;">
-                        Enter the drive letter of the selected device to retrieve its BitLocker recovery key. Result appears in Command History.
+                        Select any device and enter a drive letter to retrieve its BitLocker recovery key. Result appears in Command History.
                     </p>
                 </div>
             </div>

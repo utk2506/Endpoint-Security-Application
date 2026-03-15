@@ -36,6 +36,9 @@ from urllib import request, error, parse
 POLL_INTERVAL = 5  # seconds
 LOG_COLLECT_INTERVAL = 60  # seconds — how often to collect event logs
 
+# Cache to avoid repeatedly asking for BitLocker keys (which takes 5s per drive)
+_recovery_keys_cache = {}
+
 # ── Event Log Collector ────────────────────────────────────────────────────
 
 # Maps (log_source) → list of Event IDs to collect
@@ -413,6 +416,34 @@ $result | ConvertTo-Json -Depth 4 -Compress
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout.strip())
+            
+            # --- Auto-fetch BitLocker Recovery Keys ---
+            import re
+            for disk in data.get('disks', []):
+                drive = disk.get('drive', '')
+                bl_status = str(disk.get('bitlocker', ''))
+                
+                # Check if drive is actually encrypted
+                is_encrypted = 'Protection On' in bl_status or ('%' in bl_status and not bl_status.startswith('0%') and not bl_status.startswith('N/A'))
+                
+                if is_encrypted:
+                    if drive not in _recovery_keys_cache:
+                        log('INFO', f"Auto-fetching recovery key for {drive}...")
+                        success, out = execute_get_bitlocker_key(drive)
+                        if success:
+                            # Extract 48-digit numerical password: "Password: \n 111111-222222-..."
+                            match = re.search(r'Password:\s*([0-9-]{55})', out)
+                            if match:
+                                _recovery_keys_cache[drive] = match.group(1).strip()
+                            else:
+                                _recovery_keys_cache[drive] = "Key not found in output"
+                        else:
+                            _recovery_keys_cache[drive] = "Failed to fetch key"
+                    
+                    disk['recovery_key'] = _recovery_keys_cache.get(drive, "Not found")
+                else:
+                    disk['recovery_key'] = "Not Encrypted"
+
             log('INFO', f"✓ System info collected (CPU: {data.get('cpu_name','?')}, RAM: {data.get('ram_total_gb','?')} GB)")
             return data
         else:

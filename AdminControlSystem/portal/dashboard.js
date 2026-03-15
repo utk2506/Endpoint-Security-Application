@@ -1347,25 +1347,37 @@ function renderSysInfo(container, info) {
 }
 
 async function getBitLockerKey(deviceId, driveLetter) {
-    if (!confirm(`Retrieve BitLocker Recovery Key for ${driveLetter}?\n\nThis action will be logged in Command History.`)) return;
+    const cachedDevice = _deviceCache.find(d => d.id === deviceId);
+    if (!cachedDevice || !cachedDevice.system_info) {
+        toast('Device data not available', 'error');
+        return;
+    }
 
     try {
-        await api('POST', '/send_command', {
-            device_id: deviceId,
-            action: 'get_bitlocker_key',
-            payload: driveLetter
-        });
-        toast(`Recovery key request sent for ${driveLetter}`, 'success');
-        closeSysInfoModal();
-        showSection('cmd-history');
-        setTimeout(() => loadHistory(), 1000);
+        const info = JSON.parse(cachedDevice.system_info);
+        const disks = Array.isArray(info.disks) ? info.disks : (info.disks ? [info.disks] : []);
+        const targetDisk = disks.find(d => d.drive === driveLetter);
+
+        if (!targetDisk) {
+            toast(`Drive ${driveLetter} not found`, 'error');
+            return;
+        }
+
+        const recoveryKey = targetDisk.recovery_key;
+        if (!recoveryKey || recoveryKey === 'Not Encrypted') {
+            toast(`Drive ${driveLetter} is not encrypted`, 'info');
+        } else if (recoveryKey === 'Not found' || recoveryKey.startsWith('Failed') || recoveryKey.includes('Key not found')) {
+            toast(`Key not yet synced. The agent is fetching it in the background.`, 'warning');
+        } else {
+            alert(`🔑 BitLocker Recovery Key\n\nDevice: ${cachedDevice.hostname}\nDrive: ${driveLetter}\n\nKey: ${recoveryKey}`);
+        }
     } catch (e) {
-        toast(e.message || 'Failed to send recovery key request', 'error');
+        toast('Error reading key data', 'error');
     }
 }
 
 async function getBitLockerKeyStandalone() {
-    const deviceId = selectedDeviceId || $('deviceSelect')?.value;
+    const deviceId = $('bitlockerDevice')?.value || selectedDeviceId || $('deviceSelect')?.value;
     if (!deviceId) { toast('Select a target device first', 'error'); return; }
 
     const driveInput = $('bitlockerDrive');
@@ -1373,21 +1385,8 @@ async function getBitLockerKeyStandalone() {
     if (!drive) { toast('Enter a drive letter (e.g. C:)', 'error'); return; }
     if (drive.length === 1) drive += ':';
 
-    if (!confirm(`Retrieve BitLocker Recovery Key for ${drive} on this device?\n\nThis action will be logged.`)) return;
-
-    try {
-        await api('POST', '/send_command', {
-            device_id: deviceId,
-            action: 'get_bitlocker_key',
-            payload: drive
-        });
-        toast(`Recovery key request sent for ${drive}`, 'success');
-        driveInput.value = '';
-        showSection('cmd-history');
-        setTimeout(() => loadHistory(), 1000);
-    } catch (e) {
-        toast(e.message || 'Failed to send recovery key request', 'error');
-    }
+    getBitLockerKey(deviceId, drive);
+    driveInput.value = '';
 }
 
 // ── Polling ────────────────────────────────────────────────────────────────
