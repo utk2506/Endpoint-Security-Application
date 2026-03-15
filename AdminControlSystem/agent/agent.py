@@ -338,12 +338,17 @@ $totalGB  = [math]::Round($os.TotalVisibleMemorySize / 1MB, 2)
 $cpu      = Get-WmiObject Win32_Processor | Select-Object -First 1
 $cpuLoad  = (Get-WmiObject Win32_Processor | Measure-Object -Property LoadPercentage -Average).Average
 
-# Disks
+# Disks & BitLocker
 $disksRaw = Get-WmiObject Win32_LogicalDisk -Filter "DriveType=3" | ForEach-Object {
+    $drive = $_.DeviceID
+    $bl = manage-bde -status $drive
+    $status = if ($bl -match 'Percentage Encrypted:\s+(.+)') { $matches[1] } else { 'Unknown' }
+    $prot   = if ($bl -match 'Protection Status:\s+(.+)') { $matches[1] } else { 'Unknown' }
     @{
-        drive    = $_.DeviceID
-        size_gb  = [math]::Round($_.Size / 1GB, 2)
-        free_gb  = [math]::Round($_.FreeSpace / 1GB, 2)
+        drive       = $drive
+        size_gb     = [math]::Round($_.Size / 1GB, 2)
+        free_gb     = [math]::Round($_.FreeSpace / 1GB, 2)
+        bitlocker   = "$status ($prot)"
     }
 }
 
@@ -406,6 +411,39 @@ $result | ConvertTo-Json -Depth 4 -Compress
     except Exception as e:
         log('WARN', f"System info error: {e}")
     return None
+
+
+def execute_get_bitlocker_key(drive_letter, dry_run=False):
+    """Retrieve BitLocker recovery key for a drive using manage-bde."""
+    if not drive_letter:
+        return False, "Drive letter required"
+    
+    drive = drive_letter.strip().upper()
+    if len(drive) == 1:
+        drive += ':'
+    elif not drive.endswith(':'):
+        # might be "C:" already
+        pass
+
+    cmd = ['manage-bde', '-protectors', '-get', drive, '-type', 'RecoveryPassword']
+    
+    if dry_run:
+        log('DRY-RUN', f"Would run: {' '.join(cmd)}")
+        return True, "Dry-run: recovery key command would be executed"
+
+    try:
+        # Run with elevated privileges (admin check is done at agent start)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        if result.returncode == 0:
+            output = result.stdout
+            log('INFO', f"✓ BitLocker key retrieved for {drive}")
+            return True, output
+        else:
+            err = result.stderr.strip() or result.stdout.strip()
+            return False, f"BitLocker error: {err}"
+    except Exception as e:
+        log('WARN', f"execute_get_bitlocker_key error: {e}")
+        return False, f"Execution error: {str(e)}"
 
 # ── Commands ────────────────────────────────────────────────────────────────
 
@@ -841,6 +879,10 @@ def main():
 
                 elif action == 'notify':
                     success, output = execute_notify(payload, dry_run)
+                    report_result(server, cmd_id, success, output)
+
+                elif action == 'get_bitlocker_key':
+                    success, output = execute_get_bitlocker_key(payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 else:

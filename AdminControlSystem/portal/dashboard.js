@@ -1274,13 +1274,23 @@ function renderSysInfo(container, info) {
 
     // Disks
     const disks = Array.isArray(info.disks) ? info.disks : (info.disks ? [info.disks] : []);
-    const disksHtml = disks.map(d => `
+    const disksHtml = disks.map(d => {
+        const blStatus = d.bitlocker || 'Unknown';
+        const isEncrypted = blStatus.toLowerCase().includes('encrypted') || blStatus.includes('%') && !blStatus.includes('0.0%');
+        const keyBtn = isEncrypted ? 
+            `<button class="btn btn-sm" style="margin-top:10px; width:100%; justify-content:center; background:var(--bg-tertiary); border:1px solid var(--accent); color:var(--accent-light);" 
+                     onclick="getBitLockerKey('${selectedDeviceId}', '${d.drive}')">🔑 Get Recovery Key</button>` : '';
+
+        return `
         <div class="sysinfo-card full-width">
             <div class="sysinfo-card-title">💾 Storage — ${d.drive}</div>
             ${row('Total', `${d.size_gb} GB`)}
             ${row('Free', `${d.free_gb} GB`)}
+            ${row('BitLocker', `<span style="color:${isEncrypted ? 'var(--success)' : 'var(--text-secondary)'}">${blStatus}</span>`)}
+            ${keyBtn}
             ${pct(d.size_gb - d.free_gb, d.size_gb)}
-        </div>`).join('');
+        </div>`;
+    }).join('');
 
     // Network
     const nics = Array.isArray(info.network) ? info.network : (info.network ? [info.network] : []);
