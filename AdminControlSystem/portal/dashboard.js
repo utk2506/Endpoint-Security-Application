@@ -1275,8 +1275,13 @@ function renderSysInfo(container, info) {
     // Disks
     const disks = Array.isArray(info.disks) ? info.disks : (info.disks ? [info.disks] : []);
     const disksHtml = disks.map(d => {
-        const blStatus = d.bitlocker || 'Unknown';
-        const isEncrypted = blStatus.toLowerCase().includes('encrypted') || blStatus.includes('%') && !blStatus.includes('0.0%');
+        const blStatus = d.bitlocker || '0% (Off)';
+        const convStatus = d.bl_status || 'Ready';
+        const isEncrypted = blStatus.toLowerCase().includes('on') || (blStatus.includes('%') && !blStatus.startsWith('0%'));
+        
+        const blColor = isEncrypted ? 'var(--success)' : 'var(--text-secondary)';
+        const blIcon = isEncrypted ? '🔒' : '🔓';
+
         const keyBtn = isEncrypted ? 
             `<button class="btn btn-sm" style="margin-top:10px; width:100%; justify-content:center; background:var(--bg-tertiary); border:1px solid var(--accent); color:var(--accent-light);" 
                      onclick="getBitLockerKey('${selectedDeviceId}', '${d.drive}')">🔑 Get Recovery Key</button>` : '';
@@ -1286,7 +1291,8 @@ function renderSysInfo(container, info) {
             <div class="sysinfo-card-title">💾 Storage — ${d.drive}</div>
             ${row('Total', `${d.size_gb} GB`)}
             ${row('Free', `${d.free_gb} GB`)}
-            ${row('BitLocker', `<span style="color:${isEncrypted ? 'var(--success)' : 'var(--text-secondary)'}">${blStatus}</span>`)}
+            ${row('BitLocker', `<span style="color:${blColor}; font-weight:600;">${blIcon} ${blStatus}</span>`)}
+            ${row('Conv. Status', `<small style="color:var(--text-muted)">${convStatus}</small>`)}
             ${keyBtn}
             ${pct(d.size_gb - d.free_gb, d.size_gb)}
         </div>`;
