@@ -82,9 +82,12 @@ async function loadDevices() {
         const select = $('deviceSelect');
         const filterSelect = $('filterDevice');
         const evtFilterSelect = $('evtFilterDevice');
+        const blDeviceSelect = $('bitlockerDevice'); // Add bitlocker device select
+        
         const currentVal = select.value;
         const currentFilterVal = filterSelect ? filterSelect.value : '';
         const currentEvtFilterVal = evtFilterSelect ? evtFilterSelect.value : '';
+        const currentBlVal = blDeviceSelect ? blDeviceSelect.value : '';
         
         select.innerHTML = '<option value="">— Select a device —</option>';
         if (filterSelect) {
@@ -92,6 +95,9 @@ async function loadDevices() {
         }
         if (evtFilterSelect) {
             evtFilterSelect.innerHTML = '<option value="">All Devices</option>';
+        }
+        if (blDeviceSelect) {
+            blDeviceSelect.innerHTML = '<option value="">— Select a device —</option>';
         }
 
         const now = new Date();
@@ -118,7 +124,19 @@ async function loadDevices() {
                 eOpt.textContent = `${d.hostname} (${d.ip_address})`;
                 evtFilterSelect.appendChild(eOpt);
             }
+
+            if (blDeviceSelect) {
+                const bOpt = document.createElement('option');
+                bOpt.value = d.id;
+                bOpt.textContent = `${d.hostname} (${d.ip_address})`;
+                blDeviceSelect.appendChild(bOpt);
+            }
         });
+
+        if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) select.value = currentVal;
+        if (filterSelect && currentFilterVal) filterSelect.value = currentFilterVal;
+        if (evtFilterSelect && currentEvtFilterVal) evtFilterSelect.value = currentEvtFilterVal;
+        if (blDeviceSelect && currentBlVal) blDeviceSelect.value = currentBlVal;
 
         // Rebuild notify device list checkboxes
         const notifyList = $('notifyDeviceList');
@@ -1354,7 +1372,7 @@ async function getBitLockerKey(deviceId, driveLetter) {
     }
 
     try {
-        const info = JSON.parse(cachedDevice.system_info);
+        const info = typeof cachedDevice.system_info === 'string' ? JSON.parse(cachedDevice.system_info) : cachedDevice.system_info;
         const disks = Array.isArray(info.disks) ? info.disks : (info.disks ? [info.disks] : []);
         const targetDisk = disks.find(d => d.drive === driveLetter);
 
