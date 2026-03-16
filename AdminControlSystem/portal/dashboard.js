@@ -27,6 +27,23 @@ function checkAuth() {
 
 const token = checkAuth();
 
+// ── Logout Modal Helpers ──────────────────────────────────────────────────
+
+function showLogoutModal() {
+    const m = document.getElementById('logoutModal');
+    if (m) m.classList.add('show');
+}
+
+function hideLogoutModal() {
+    const m = document.getElementById('logoutModal');
+    if (m) m.classList.remove('show');
+}
+
+function performLogout() {
+    localStorage.removeItem('token');
+    window.location.href = '/portal/login.html';
+}
+
 // ── Role-Based Access Control ──────────────────────────────────────────────
 
 let _userRole = 'admin'; // default assumption until verified

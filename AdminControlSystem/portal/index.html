@@ -152,6 +152,23 @@
     </div>
 </div>
 
+<!-- Logout Modal -->
+<div class="modal-overlay" id="logoutModal" onclick="if(event.target===this) hideLogoutModal()">
+    <div class="modal-box size-sm" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            🚪 Log Out
+            <button class="modal-close" onclick="hideLogoutModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <p style="font-size:14px;color:var(--text);margin-bottom:20px;text-align:center;">Are you sure you want to securely log out of the Admin Control System?</p>
+            <div class="btn-group" style="margin-top:0;">
+                <button class="btn btn-danger" style="flex:1;justify-content:center;" onclick="performLogout()">Log Out</button>
+                <button class="btn btn-outline" style="flex:1;justify-content:center;" onclick="hideLogoutModal()">Cancel</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer"></div>
 
@@ -175,7 +192,7 @@
             <span class="conn-dot" id="connectionDot"></span>
             <span id="connectionText">Connecting…</span>
         </div>
-        <div class="avatar-chip" title="Log Out" style="cursor: pointer;" onclick="if(confirm('Are you sure you want to log out?')) { localStorage.removeItem('token'); window.location.href='/portal/login.html'; }">IT</div>
+        <div class="avatar-chip" title="Log Out" style="cursor: pointer;" onclick="showLogoutModal()">IT</div>
     </div>
 </div>
 
