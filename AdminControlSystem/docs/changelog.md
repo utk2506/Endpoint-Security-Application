@@ -177,11 +177,23 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 11: Authentication & Security
+**Status**: Completed  
+**Completion Date**: March 16, 2026
+
+### Features Implemented
+- **[2026-03-16]** **Secure Login Portal**: Introduced an authenticated, premium glassmorphism login gateway blocking unauthorized access to the IT dashboard.
+- **[2026-03-16]** **JWT Authorization**: Configured FastAPI to issue and validate secure JSON Web Tokens (JWT), ensuring all endpoints (like `/devices`, `/commands`) are fully protected.
+- **[2026-03-16]** **Encrypted Admin Accounts**: Expanded the backend schema with a `User` model, securely storing hashed passwords using the robust `bcrypt` algorithm.
+- **[2026-03-16]** **Admin Provisioning Utility**: Created a `create_admin.py` standalone tool to easily generate root administrative accounts for initial setup.
+- **[2026-03-16]** **Automatic Token Rejection**: Frontend automatically redirects users to the login page when encountering `401 Unauthorized` API responses.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 
 ### Planned Features
-- Authentication and Secure Login for the Portal
 - HTTPS/TLS encryption for Agent-Server communication
 - Role-based Access Control (RBAC)
 - Audit Logging export (CSV/PDF)
