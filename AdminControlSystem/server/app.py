@@ -10,14 +10,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict
 
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect  # type: ignore
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
 from fastapi.responses import FileResponse  # type: ignore
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm  # type: ignore
 from pydantic import BaseModel  # type: ignore
 from sqlalchemy.orm import Session  # type: ignore
+from jose import JWTError, jwt  # type: ignore
+from passlib.context import CryptContext  # type: ignore
+from datetime import datetime, timedelta, timezone
 
-from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign  # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -51,7 +55,56 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-# ── App ──────────────────────────────────────────────────────────────────────
+# ── Security Configuration ──────────────────────────────────────────────────
+
+SECRET_KEY = "super-secret-key-change-this-in-production"  # In a real app, use environment variables
+ALGORITHM = "HS256"
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
+
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None):
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.now(timezone.utc) + expires_delta
+    else:
+        expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        username: str = payload.get("sub")
+        if username is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    
+    user = db.query(User).filter(User.username == username).first()
+    if user is None:
+        raise credentials_exception
+    return user
 
 app = FastAPI(title="Admin Control System", version="1.0.0")
 
@@ -82,12 +135,6 @@ async def websocket_agent(websocket: WebSocket, device_id: str):
         manager.disconnect(device_id, "agent")
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
 
 
 # ── Pydantic schemas ────────────────────────────────────────────────────────
@@ -112,6 +159,32 @@ class CommandResultRequest(BaseModel):
     status: str          # completed | failed
     result: Optional[str] = None
     admin_list: Optional[list[str]] = None   # populated for 'check' actions
+
+
+# ── API: Authentication ────────────────────────────────────────────────────
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+@app.post("/api/auth/login", response_model=Token)
+async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.username == form_data.username).first()
+    if not user or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect username or password",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": user.username}, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+@app.get("/api/auth/verify")
+async def verify_token(current_user: User = Depends(get_current_user)):
+    return {"status": "ok", "username": current_user.username}
 
 
 # ── API: Device Management ──────────────────────────────────────────────────
@@ -142,7 +215,7 @@ def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @app.get("/devices")
-def list_devices(db: Session = Depends(get_db)):
+def list_devices(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Return all registered devices."""
     devices = db.query(Device).order_by(Device.hostname).all()
 
@@ -168,7 +241,7 @@ def list_devices(db: Session = Depends(get_db)):
 # ── API: Command Queue ─────────────────────────────────────────────────────
 
 @app.post("/send_command")
-def send_command(req: SendCommandRequest, db: Session = Depends(get_db)):
+def send_command(req: SendCommandRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Queue a command for a device."""
     device = db.query(Device).filter(Device.id == req.device_id).first()
     if not device:
@@ -274,7 +347,7 @@ def command_result(req: CommandResultRequest, db: Session = Depends(get_db)):
 # ── API: Admin List ─────────────────────────────────────────────────────────
 
 @app.get("/admin_list/{device_id}")
-def get_admin_list(device_id: str, db: Session = Depends(get_db)):
+def get_admin_list(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Return the latest admin snapshot for a device."""
     snapshot = (
         db.query(AdminSnapshot)
@@ -303,7 +376,8 @@ def command_history(
     action: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Return recent command history across devices, with filtering, pagination, and sorting."""
     query = db.query(Command)
@@ -421,7 +495,8 @@ def get_event_logs(
     log_source: Optional[str] = None,
     event_id: Optional[int] = None,
     search: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Return paginated, filterable, sortable event logs for the portal."""
     query = db.query(EventLog)
@@ -482,7 +557,8 @@ def get_event_logs(
 @app.get("/api/v1/event-logs/summary")
 def get_event_log_summary(
     device_id: Optional[str] = None,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
     """Return aggregated event log counts for dashboard stats cards."""
     from sqlalchemy import func  # type: ignore
@@ -532,7 +608,7 @@ class NotificationCreateRequest(BaseModel):
     interval_minutes: Optional[int] = None
 
 @app.post("/api/v1/notifications")
-def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db)):
+def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Create a new notification (one-off or recurring) for multiple devices."""
     devices = db.query(Device).filter(Device.id.in_(req.device_ids)).all()
     if not devices:
@@ -582,7 +658,7 @@ def create_notification(req: NotificationCreateRequest, db: Session = Depends(ge
     return {"message": f"Recurring campaign created for {created} devices"}
 
 @app.get("/api/v1/notifications/{device_id}")
-def get_notifications(device_id: str, db: Session = Depends(get_db)):
+def get_notifications(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Get active recurring campaigns for a device."""
     campaigns = db.query(NotificationCampaign).filter(
         NotificationCampaign.device_id == device_id,
@@ -603,7 +679,7 @@ def get_notifications(device_id: str, db: Session = Depends(get_db)):
     return {"campaigns": results}
 
 @app.delete("/api/v1/notifications/{campaign_id}")
-def delete_notification(campaign_id: int, db: Session = Depends(get_db)):
+def delete_notification(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Cancel a recurring campaign."""
     camp = db.query(NotificationCampaign).filter(NotificationCampaign.id == campaign_id).first()
     if not camp:

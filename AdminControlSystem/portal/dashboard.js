@@ -15,13 +15,36 @@ let terminalSocket = null;
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
+// ── Authentication Check ──────────────────────────────────────────────────
+
+function checkAuth() {
+    const token = localStorage.getItem('token');
+    if (!token && window.location.pathname !== '/portal/login.html') {
+        window.location.href = '/portal/login.html';
+    }
+    return token;
+}
+
+const token = checkAuth();
+
 async function api(method, path, body = null) {
+    const token = localStorage.getItem('token');
     const opts = {
         method,
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        },
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${API_BASE}${path}`, opts);
+    
+    if (res.status === 401) {
+        localStorage.removeItem('token');
+        window.location.href = '/portal/login.html';
+        return;
+    }
+
     if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: res.statusText }));
         throw new Error(err.detail || 'Request failed');
