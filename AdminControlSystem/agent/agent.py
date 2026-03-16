@@ -831,7 +831,11 @@ async def interactive_shell_loop(server_url, device_id):
     while True:
         pty_proc = None
         try:
-            async with websockets.connect(ws_url, origin=server_url) as ws:  # type: ignore
+            connect_kwargs = {"origin": server_url}
+            if ws_url.startswith("wss://") and _ssl_context:
+                connect_kwargs["ssl"] = _ssl_context
+
+            async with websockets.connect(ws_url, **connect_kwargs) as ws:  # type: ignore
                 log('INFO', "Connected to Interactive Shell Relay — starting PTY")
 
                 from winpty import PtyProcess  # type: ignore
