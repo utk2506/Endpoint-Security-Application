@@ -52,8 +52,8 @@ async function loadUserRole() {
 function applyViewerRestrictions() {
     // All action buttons that are admin-only
     const adminOnlyIds = [
-        'grantBtn', 'revokeBtn', 'checkBtn', 'sendShellBtn',
-        'createUserBtn', 'sendNotificationBtn'
+        'btnGrant', 'btnRevoke', 'btnCheck', 'sendShellBtn', 'openTerminalBtn',
+        'btnCreateUser', 'sendNotificationBtn'
     ];
     adminOnlyIds.forEach(id => {
         const el = document.getElementById(id);
