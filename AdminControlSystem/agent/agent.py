@@ -289,6 +289,10 @@ def log(level, message):
         pass
 
 
+# Global SSL context (set at startup based on --no-verify-ssl flag)
+_ssl_context = None
+
+
 def api_call(base_url, method, path, body=None):
     """Simple HTTP helper using only urllib (no external deps)."""
     url = f"{base_url}{path}"
@@ -297,7 +301,7 @@ def api_call(base_url, method, path, body=None):
     req.add_header('Content-Type', 'application/json')
 
     try:
-        with request.urlopen(req, timeout=10) as res:
+        with request.urlopen(req, timeout=10, context=_ssl_context) as res:
             return json.loads(res.read().decode('utf-8'))
     except error.HTTPError as e:
         detail = e.read().decode('utf-8', errors='replace')
@@ -936,7 +940,21 @@ def main():
                         help='Central server URL (default: http://localhost:8000)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print commands instead of executing them')
+    parser.add_argument('--no-verify-ssl', action='store_true',
+                        help='Disable SSL certificate verification (for self-signed certs)')
+    parser.add_argument('--tray', action='store_true',
+                        help='Show a system tray icon (requires pystray + Pillow)')
     args = parser.parse_args()
+
+    # Configure SSL context globally
+    global _ssl_context
+    if args.no_verify_ssl or args.server.startswith('https://'):
+        import ssl
+        _ssl_context = ssl.create_default_context()
+        if args.no_verify_ssl:
+            _ssl_context.check_hostname = False
+            _ssl_context.verify_mode = ssl.CERT_NONE
+            log('WARN', 'SSL certificate verification is DISABLED (self-signed cert mode).')
 
     server = args.server.rstrip('/')
     dry_run = args.dry_run
@@ -1026,6 +1044,18 @@ def main():
     log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
     log('INFO', f"Polling for commands every {POLL_INTERVAL}s…")
 
+    # If --tray mode: run poll loop in background thread and hand off to system tray
+    if getattr(args, 'tray', False):
+        poll_thread = threading.Thread(target=lambda: main_loop(server, device_id, dry_run), daemon=True)
+        poll_thread.start()
+        run_with_tray(server, device_id)
+        return
+
+    main_loop(server, device_id, dry_run)
+
+
+def main_loop(server, device_id, dry_run=False):
+    """The main polling loop — runs indefinitely."""
     while True:
         try:
             resp = api_call(server, 'GET', f'/get_command/{device_id}')
@@ -1100,6 +1130,56 @@ def report_result(server, cmd_id, success, output, admin_list=None):
         log('INFO', f"⬆ Result for #{cmd_id} reported: {'completed' if success else 'failed'}")
     else:
         log('WARN', f"Failed to report result for #{cmd_id}")
+
+
+# ── System Tray Icon ─────────────────────────────────────────────────────────
+
+def _create_tray_image():
+    """Generate a simple shield icon programmatically using Pillow."""
+    from PIL import Image, ImageDraw  # type: ignore
+    size = 64
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    # Dark navy shield background
+    draw.polygon([(32, 4), (58, 16), (58, 36), (32, 60), (6, 36), (6, 16)], fill=(26, 37, 53))
+    # White 'A' letter for "Admin"
+    draw.text((22, 18), "A", fill=(255, 255, 255))
+    return img
+
+
+def run_with_tray(server, device_id):
+    """Launch agent main loop as a background thread, then show a system tray icon."""
+    try:
+        import pystray  # type: ignore
+    except ImportError:
+        log('WARN', "pystray not installed — running without tray. Install with: pip install pystray Pillow")
+        main_loop(server, device_id)
+        return
+
+    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_debug.log')
+
+    def on_status(icon, item):
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(0, f"Connected to:\n{server}\n\nDevice ID:\n{device_id}", "ACS Agent Status", 0)
+
+    def on_open_log(icon, item):
+        os.startfile(log_path)
+
+    def on_exit(icon, item):
+        log('INFO', "Agent exiting via tray menu.")
+        icon.stop()
+        os._exit(0)
+
+    icon_image = _create_tray_image()
+    menu = pystray.Menu(
+        pystray.MenuItem("📋 Status", on_status),
+        pystray.MenuItem("📄 Open Log", on_open_log),
+        pystray.Menu.SEPARATOR,
+        pystray.MenuItem("❌ Exit", on_exit),
+    )
+    tray = pystray.Icon("ACS Agent", icon_image, "ACS Agent", menu)
+    log('INFO', "🖥️  System tray icon active. Right-click the tray for options.")
+    tray.run()
 
 
 if __name__ == '__main__':

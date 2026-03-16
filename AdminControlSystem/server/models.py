@@ -123,9 +123,10 @@ class User(Base):
     username = Column(String(255), unique=True, index=True, nullable=False)
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
+    role = Column(String(20), default="admin")   # "admin" | "viewer"
 
     def __repr__(self):
-        return f"<User(id={self.id}, username='{self.username}')>"
+        return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
 
 
 # Create all tables on import

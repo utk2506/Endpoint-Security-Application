@@ -106,6 +106,17 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         raise credentials_exception
     return user
 
+
+async def require_admin(current_user: User = Depends(get_current_user)):
+    """Raises 403 if the logged-in user is not an admin."""
+    if getattr(current_user, 'role', 'admin') != 'admin':
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required to perform this action.",
+        )
+    return current_user
+
+
 app = FastAPI(title="Admin Control System", version="1.0.0")
 
 # CORS middleware removed to avoid WebSocket 403s
@@ -186,6 +197,14 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
 async def verify_token(current_user: User = Depends(get_current_user)):
     return {"status": "ok", "username": current_user.username}
 
+@app.get("/api/auth/me")
+async def get_me(current_user: User = Depends(get_current_user)):
+    """Return the current user's profile including their role."""
+    return {
+        "username": current_user.username,
+        "role": getattr(current_user, 'role', 'admin'),
+    }
+
 
 # ── API: Device Management ──────────────────────────────────────────────────
 
@@ -241,7 +260,7 @@ def list_devices(db: Session = Depends(get_db), current_user: User = Depends(get
 # ── API: Command Queue ─────────────────────────────────────────────────────
 
 @app.post("/send_command")
-def send_command(req: SendCommandRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def send_command(req: SendCommandRequest, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     """Queue a command for a device."""
     device = db.query(Device).filter(Device.id == req.device_id).first()
     if not device:
@@ -608,7 +627,7 @@ class NotificationCreateRequest(BaseModel):
     interval_minutes: Optional[int] = None
 
 @app.post("/api/v1/notifications")
-def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     """Create a new notification (one-off or recurring) for multiple devices."""
     devices = db.query(Device).filter(Device.id.in_(req.device_ids)).all()
     if not devices:
@@ -679,7 +698,7 @@ def get_notifications(device_id: str, db: Session = Depends(get_db), current_use
     return {"campaigns": results}
 
 @app.delete("/api/v1/notifications/{campaign_id}")
-def delete_notification(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_notification(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     """Cancel a recurring campaign."""
     camp = db.query(NotificationCampaign).filter(NotificationCampaign.id == campaign_id).first()
     if not camp:
@@ -786,6 +805,105 @@ def _notification_scheduler_loop():
 _notify_thread = threading.Thread(target=_notification_scheduler_loop, daemon=True)
 _notify_thread.start()
 
+
+# ── Audit Log Export ─────────────────────────────────────────────────────────
+
+from fastapi.responses import StreamingResponse  # type: ignore
+import csv, io
+
+@app.get("/api/v1/audit/export/csv")
+def export_audit_csv(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download the full command history as a CSV file."""
+    cmds = db.query(Command).order_by(Command.created_at.desc()).all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Device ID", "Action", "Username", "Payload", "Status", "Result", "Created At", "Executed At", "Expires At", "Auto Revoked"])
+    for c in cmds:
+        writer.writerow([
+            c.id, c.device_id, c.action,
+            c.username or "",
+            "***" if c.action == "create_user" else (c.payload or ""),
+            c.status, (c.result or "")[:200],
+            c.created_at.isoformat() if c.created_at else "",
+            c.executed_at.isoformat() if c.executed_at else "",
+            c.expires_at.isoformat() if c.expires_at else "",
+            str(c.auto_revoked or False),
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=audit_log.csv"},
+    )
+
+
+@app.get("/api/v1/audit/export/pdf")
+def export_audit_pdf(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download the full command history as a PDF file."""
+    try:
+        from reportlab.lib.pagesizes import A4, landscape  # type: ignore
+        from reportlab.lib import colors  # type: ignore
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer  # type: ignore
+        from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
+    except ImportError:
+        raise HTTPException(status_code=500, detail="reportlab not installed. Run: pip install reportlab")
+
+    cmds = db.query(Command).order_by(Command.created_at.desc()).limit(500).all()
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=20)
+    styles = getSampleStyleSheet()
+    elems = []
+
+    elems.append(Paragraph("Admin Control System — Audit Log Export", styles["Title"]))
+    elems.append(Paragraph(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", styles["Normal"]))
+    elems.append(Spacer(1, 12))
+
+    headers = ["ID", "Device ID", "Action", "User", "Status", "Result", "Created At"]
+    data = [headers]
+    for c in cmds:
+        data.append([
+            str(c.id),
+            str(c.device_id)[:8] + "...",
+            c.action,
+            c.username or "—",
+            c.status,
+            (c.result or "")[:60],
+            c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "—",
+        ])
+
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a2535")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f4f8")]),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+    ]))
+    elems.append(table)
+    doc.build(elems)
+
+    buf.seek(0)
+    return StreamingResponse(
+        iter([buf.read()]),
+        media_type="application/pdf",
+        headers={"Content-Disposition": "attachment; filename=audit_log.pdf"},
+    )
 
 
 # ── Serve Portal Static Files ───────────────────────────────────────────────

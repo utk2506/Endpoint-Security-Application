@@ -27,6 +27,67 @@ function checkAuth() {
 
 const token = checkAuth();
 
+// ── Role-Based Access Control ──────────────────────────────────────────────
+
+let _userRole = 'admin'; // default assumption until verified
+
+async function loadUserRole() {
+    try {
+        const me = await api('GET', '/api/auth/me');
+        if (me && me.role) {
+            _userRole = me.role;
+            if (_userRole === 'viewer') {
+                applyViewerRestrictions();
+            }
+            // Show role badge in header if element exists
+            const badge = document.getElementById('roleBadge');
+            if (badge) {
+                badge.textContent = _userRole === 'admin' ? '🛡️ Admin' : '👁️ Viewer';
+                badge.title = _userRole === 'admin' ? 'Full access' : 'Read-only access';
+            }
+        }
+    } catch (e) { /* silently ignore, default is admin */ }
+}
+
+function applyViewerRestrictions() {
+    // All action buttons that are admin-only
+    const adminOnlyIds = [
+        'grantBtn', 'revokeBtn', 'checkBtn', 'sendShellBtn',
+        'createUserBtn', 'sendNotificationBtn'
+    ];
+    adminOnlyIds.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = true;
+            el.title = 'Admin role required';
+            el.style.opacity = '0.4';
+            el.style.cursor = 'not-allowed';
+        }
+    });
+}
+
+// ── Audit Log Export ───────────────────────────────────────────────────────
+
+async function downloadAuditExport(format) {
+    const t = localStorage.getItem('token');
+    const res = await fetch(`${API_BASE}/api/v1/audit/export/${format}`, {
+        headers: { 'Authorization': `Bearer ${t}` }
+    });
+    if (!res.ok) { toast('Export failed: ' + res.statusText, 'error'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `audit_log.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`Audit log exported as ${format.toUpperCase()}`, 'success');
+}
+
+
+
 async function api(method, path, body = null) {
     const token = localStorage.getItem('token');
     const opts = {
@@ -1574,6 +1635,7 @@ async function pollAll() {
 }
 
 // Initial load
+loadUserRole();  // Apply RBAC immediately
 pollAll();
 
 // Auto-refresh every 5 seconds
