@@ -190,11 +190,22 @@ This document tracks the progress of the Admin Control System, including complet
 
 ---
 
+## 🟢 Phase 12: Security Hardening & Agent Enhancement
+**Status**: Completed  
+**Completion Date**: March 16, 2026
+
+### Features Implemented
+- **[2026-03-16]** **HTTPS / TLS Encryption**: Added `generate_cert.py` to auto-create a self-signed SSL certificate. The server now starts with `--ssl-keyfile`/`--ssl-certfile` flags and the agent connects securely over `https://` with a `--no-verify-ssl` option for development.
+- **[2026-03-16]** **Role-Based Access Control (RBAC)**: Introduced `admin` and `viewer` roles on the `User` model. A `require_admin` dependency gates all destructive endpoints (`/send_command`, notifications). Viewer users see a read-only portal — action buttons are visually disabled with a tooltip.
+- **[2026-03-16]** **Audit Log Export (CSV / PDF)**: New portal toolbar buttons trigger `GET /api/v1/audit/export/csv` and `GET /api/v1/audit/export/pdf` to download a full command history export for compliance reporting (up to 500 rows for PDF, unlimited for CSV).
+- **[2026-03-16]** **Agent System Tray Icon**: The agent now supports a `--tray` flag using `pystray` + `Pillow`. When enabled, a shield-style icon appears in the Windows taskbar notification area with a right-click menu: **Status**, **Open Log**, and **Exit**.
+
+---
+
 ## 🟡 Pending / Future Phases
 **Status**: Not Started
 
 ### Planned Features
-- HTTPS/TLS encryption for Agent-Server communication
 - Role-based Access Control (RBAC)
 - Audit Logging export (CSV/PDF)
 - System tray icon for the Agent
