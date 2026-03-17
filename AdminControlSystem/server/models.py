@@ -41,6 +41,11 @@ class Device(Base):
         back_populates="device",
         cascade="all, delete-orphan",
     )
+    activity_logs = relationship(
+        "ActivityLog",
+        back_populates="device",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Device(id={self.id}, hostname='{self.hostname}')>"
@@ -138,6 +143,24 @@ class EventLog(Base):
 
     def __repr__(self):
         return f"<EventLog(id={self.id}, event_id={self.event_id}, event_name='{self.event_name}')>"
+
+
+class ActivityLog(Base):
+    __tablename__ = "activity_logs"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
+    timestamp = Column(DateTime, default=utcnow, index=True)
+    window_title = Column(Text, nullable=True)
+    process_name = Column(String(260), nullable=True)
+    idle_seconds = Column(Integer, default=0)
+    click_count = Column(Integer, default=0)
+    keypress_count = Column(Integer, default=0)
+
+    device = relationship("Device", back_populates="activity_logs")
+
+    def __repr__(self):
+        return f"<ActivityLog(id={self.id}, device_id={self.device_id}, process='{self.process_name}')>"
 
 
 class User(Base):

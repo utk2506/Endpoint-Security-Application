@@ -15,6 +15,7 @@ import platform
 import os
 import socket
 import ctypes
+from ctypes import wintypes
 
 def is_admin():
     """Check if the agent is running with Administrator privileges."""
@@ -36,6 +37,7 @@ from urllib import request, error, parse
 POLL_INTERVAL = 5  # seconds
 LOG_COLLECT_INTERVAL = 60  # seconds — how often to collect event logs
 SOFTWARE_REFRESH_INTERVAL = 600  # seconds — refresh installed software inventory
+ACTIVITY_INTERVAL = 15  # seconds — user activity sampling
 
 # Cache to avoid repeatedly asking for BitLocker keys (which takes 5s per drive)
 _recovery_keys_cache = {}
@@ -616,6 +618,91 @@ def push_software_inventory(server, device_id):
         log('INFO', f"✓ Sent software inventory ({resp.get('count', 0)} items)")
     else:
         log('WARN', "Failed to send software inventory")
+
+
+# ── User Activity Tracking ────────────────────────────────────────────────
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+
+def _get_process_name(pid: int) -> str:
+    try:
+        h_proc = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not h_proc:
+            return ""
+        try:
+            buf = ctypes.create_unicode_buffer(260)
+            size = wintypes.DWORD(len(buf))
+            if ctypes.windll.kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
+                return os.path.basename(buf.value)
+        finally:
+            ctypes.windll.kernel32.CloseHandle(h_proc)
+    except Exception:
+        return ""
+    return ""
+
+
+def _get_foreground_window_info():
+    """Return (title, process_name) for the current foreground window."""
+    try:
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return None, None
+
+        # Title
+        buf = ctypes.create_unicode_buffer(512)
+        ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512)
+        title = buf.value.strip()
+
+        # PID -> process name
+        pid = wintypes.DWORD()
+        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        proc_name = _get_process_name(pid.value)
+
+        return title or None, proc_name or None
+    except Exception as e:
+        log('WARN', f"_get_foreground_window_info error: {e}")
+        return None, None
+
+
+def _get_idle_seconds():
+    try:
+        class LASTINPUTINFO(ctypes.Structure):
+            _fields_ = [('cbSize', wintypes.UINT), ('dwTime', wintypes.DWORD)]
+        lii = LASTINPUTINFO()
+        lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
+        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+            return int(millis / 1000)
+    except Exception:
+        pass
+    return 0
+
+
+def collect_activity_sample():
+    """Collect a single user activity sample."""
+    title, proc_name = _get_foreground_window_info()
+    idle = _get_idle_seconds()
+    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    return {
+        "timestamp": now_iso,
+        "window_title": title or "",
+        "process_name": proc_name or "",
+        "idle_seconds": idle,
+        "click_count": 0,
+        "keypress_count": 0,
+    }
+
+
+def activity_sampler_thread(server, device_id):
+    log('INFO', f"🧭 Activity sampler started (interval: {ACTIVITY_INTERVAL}s)")
+    while True:
+        try:
+            sample = collect_activity_sample()
+            payload = {"device_id": device_id, "activities": [sample]}
+            api_call(server, 'POST', '/api/v1/activity', payload)
+        except Exception as e:
+            log('WARN', f"Activity sampler error: {e}")
+        time.sleep(ACTIVITY_INTERVAL)
 
 
 def execute_create_user(username, password, dry_run=False):
@@ -1232,6 +1319,17 @@ def main():
         sw_thread.start()
     else:
         log('DRY-RUN', "Skipping software inventory sync in dry-run mode.")
+
+    # ── Start Activity Tracking Background Thread ─────────────────────────
+    if not dry_run:
+        act_thread = threading.Thread(
+            target=activity_sampler_thread,
+            args=(server, device_id),
+            daemon=True
+        )
+        act_thread.start()
+    else:
+        log('DRY-RUN', "Skipping activity tracking in dry-run mode.")
 
     # ── Polling loop ────────────────────────────────────────────────────
     log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")

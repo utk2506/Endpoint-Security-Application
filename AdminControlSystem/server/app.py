@@ -22,7 +22,7 @@ from jose import JWTError, jwt  # type: ignore
 from passlib.context import CryptContext  # type: ignore
 from datetime import datetime, timedelta, timezone
 
-from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware  # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware, ActivityLog  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -198,6 +198,20 @@ class SoftwareInventoryPayload(BaseModel):
     items: list[InstalledSoftwareItem]
 
 
+class ActivityEntry(BaseModel):
+    timestamp: Optional[str] = None  # ISO-8601
+    window_title: Optional[str] = None
+    process_name: Optional[str] = None
+    idle_seconds: Optional[int] = 0
+    click_count: Optional[int] = 0
+    keypress_count: Optional[int] = 0
+
+
+class ActivityPayload(BaseModel):
+    device_id: str
+    activities: list[ActivityEntry]
+
+
 # ── API: Authentication ────────────────────────────────────────────────────
 
 class Token(BaseModel):
@@ -351,6 +365,107 @@ def get_device_software(
             }
             for s in software
         ]
+    }
+
+
+@app.post("/api/v1/activity")
+def ingest_activity(payload: ActivityPayload, db: Session = Depends(get_db)):
+    """Agent posts sampled user activity telemetry."""
+    device = db.query(Device).filter(Device.id == payload.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    rows = []
+    now_utc = datetime.now(timezone.utc)
+    for entry in payload.activities:
+        try:
+            ts = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00")) if entry.timestamp else now_utc
+        except Exception:
+            ts = now_utc
+
+        rows.append(
+            ActivityLog(
+                device_id=payload.device_id,
+                timestamp=ts,
+                window_title=(entry.window_title or "")[:1024],
+                process_name=(entry.process_name or "")[:260],
+                idle_seconds=entry.idle_seconds or 0,
+                click_count=entry.click_count or 0,
+                keypress_count=entry.keypress_count or 0,
+            )
+        )
+
+    if rows:
+        db.bulk_save_objects(rows)
+        db.commit()
+    return {"status": "ok", "inserted": len(rows)}
+
+
+@app.get("/api/v1/activity")
+def get_activity(
+    page: int = 1,
+    limit: int = 50,
+    device_id: Optional[str] = None,
+    search: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Paginated user activity stream for the portal."""
+    page = max(page, 1)
+    limit = max(1, min(limit, 200))
+
+    query = db.query(ActivityLog)
+    if device_id:
+        query = query.filter(ActivityLog.device_id == device_id)
+
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            (ActivityLog.window_title.ilike(pattern)) |
+            (ActivityLog.process_name.ilike(pattern))
+        )
+
+    if date_from:
+        try:
+            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp >= df)
+        except Exception:
+            pass
+
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp <= dt)
+        except Exception:
+            pass
+
+    total = query.count()
+    items = (
+        query.order_by(ActivityLog.timestamp.desc())
+        .offset((page - 1) * limit)
+        .limit(limit)
+        .all()
+    )
+
+    return {
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "items": [
+            {
+                "id": a.id,
+                "device_id": a.device_id,
+                "timestamp": a.timestamp.isoformat(timespec='milliseconds') + "Z" if a.timestamp else None,
+                "window_title": a.window_title,
+                "process_name": a.process_name,
+                "idle_seconds": a.idle_seconds,
+                "click_count": a.click_count,
+                "keypress_count": a.keypress_count,
+            }
+            for a in items
+        ],
     }
 
 

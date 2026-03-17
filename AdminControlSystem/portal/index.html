@@ -254,6 +254,9 @@
         <div class="sidebar-item" onclick="showView('eventlogs', this)">
             <span class="si-icon">🔍</span> Event Logs
         </div>
+        <div class="sidebar-item" onclick="showView('activity', this)">
+            <span class="si-icon">🧭</span> Activity
+        </div>
     </div>
     <div class="sidebar-section">
         <div class="sidebar-section-label">Security</div>
@@ -743,6 +746,70 @@
     </div>
 </div>
 
+<!-- ──────────────── ACTIVITY VIEW ──────────────── -->
+<div class="view" id="view-activity">
+    <div class="page-header"><div class="page-title">🧭 User Activity</div></div>
+
+    <div class="filter-grid" style="margin-bottom:12px;">
+        <div class="form-field" style="margin:0;">
+            <label>Device</label>
+            <select id="activityDevice">
+                <option value="">All devices</option>
+            </select>
+        </div>
+        <div class="form-field" style="margin:0;">
+            <label>Search</label>
+            <input id="activitySearch" type="text" placeholder="Window title or process" onkeydown="if(event.key==='Enter') loadActivity(1)">
+        </div>
+        <div class="form-field" style="margin:0;">
+            <label>From (UTC)</label>
+            <input id="activityFrom" type="datetime-local">
+        </div>
+        <div class="form-field" style="margin:0;">
+            <label>To (UTC)</label>
+            <input id="activityTo" type="datetime-local">
+        </div>
+        <div style="display:flex; align-items:flex-end;">
+            <button class="btn btn-primary" onclick="loadActivity(1)">Apply</button>
+        </div>
+    </div>
+
+    <div class="widget">
+        <div class="widget-header">
+            <span class="widget-title">Activity Stream</span>
+            <span id="activityTotal" class="muted-pill">0 events</span>
+        </div>
+        <div class="widget-body">
+            <div class="table-responsive">
+                <table class="table compact">
+                    <thead>
+                        <tr>
+                            <th style="width:180px;">Time (UTC)</th>
+                            <th style="width:170px;">Device</th>
+                            <th>Window Title</th>
+                            <th style="width:160px;">Process</th>
+                            <th style="width:90px;">Idle</th>
+                            <th style="width:90px;">Input</th>
+                        </tr>
+                    </thead>
+                    <tbody id="activityTableBody">
+                        <tr><td colspan="6"><div class="empty-state"><span class="ei">⏳</span>Loading…</div></td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination-row">
+                <div id="activityPageInfo" class="pag-info">0 results</div>
+                <div style="display:flex; gap:8px; align-items:center;">
+                    <button class="btn btn-outline btn-sm" id="btnActivityPrev" onclick="activityPrevPage()">Prev</button>
+                    <span id="activityPageNumber" style="min-width:40px; text-align:center;">1</span>
+                    <button class="btn btn-outline btn-sm" id="btnActivityNext" onclick="activityNextPage()">Next</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 
 <!-- ──────────────── BITLOCKER VIEW ──────────────── -->
 <div class="view" id="view-bitlocker">
@@ -781,6 +848,10 @@ function showView(id, el) {
     const v = document.getElementById('view-' + id);
     if (v) v.classList.add('active');
     if (el) el.classList.add('active');
+
+    if (id === 'activity') {
+        loadActivity();
+    }
 }
 
 // ── Dashboard Charts & Widgets ──────────────────────

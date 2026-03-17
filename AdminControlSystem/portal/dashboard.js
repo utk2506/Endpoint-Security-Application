@@ -8,6 +8,8 @@ const WS_BASE = window.location.origin.replace('http', 'ws');
 let selectedDeviceId = null;
 let pollInterval = null;
 let _deviceCache = [];  // cache of all devices with their all_users payload
+let activityPage = 1;
+let activityLimit = 20;
 
 // Terminal State
 let term = null;
@@ -243,11 +245,13 @@ async function loadDevices() {
         const filterSelect = $('filterDevice');
         const evtFilterSelect = $('evtFilterDevice');
         const blDeviceSelect = $('bitlockerDevice'); // Add bitlocker device select
+        const activitySelect = $('activityDevice');
         
         const currentVal = select.value;
         const currentFilterVal = filterSelect ? filterSelect.value : '';
         const currentEvtFilterVal = evtFilterSelect ? evtFilterSelect.value : '';
         const currentBlVal = blDeviceSelect ? blDeviceSelect.value : '';
+        const currentActVal = activitySelect ? activitySelect.value : '';
         
         select.innerHTML = '<option value="">— Select a device —</option>';
         if (filterSelect) {
@@ -258,6 +262,9 @@ async function loadDevices() {
         }
         if (blDeviceSelect) {
             blDeviceSelect.innerHTML = '<option value="">— Select a device —</option>';
+        }
+        if (activitySelect) {
+            activitySelect.innerHTML = '<option value="">All devices</option>';
         }
 
         const now = new Date();
@@ -293,12 +300,20 @@ async function loadDevices() {
                 bOpt.textContent = `${d.hostname} (${d.ip_address})`;
                 blDeviceSelect.appendChild(bOpt);
             }
+
+            if (activitySelect) {
+                const aOpt = document.createElement('option');
+                aOpt.value = d.id;
+                aOpt.textContent = `${d.hostname} (${d.ip_address})`;
+                activitySelect.appendChild(aOpt);
+            }
         });
 
         if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) select.value = currentVal;
         if (filterSelect && currentFilterVal) filterSelect.value = currentFilterVal;
         if (evtFilterSelect && currentEvtFilterVal) evtFilterSelect.value = currentEvtFilterVal;
         if (blDeviceSelect && currentBlVal) blDeviceSelect.value = currentBlVal;
+        if (activitySelect && currentActVal) activitySelect.value = currentActVal;
 
         // Rebuild notify device list checkboxes
         const notifyList = $('notifyDeviceList');
@@ -1363,6 +1378,101 @@ async function loadEventLogSummary() {
     }
 }
 
+// ── Activity View ─────────────────────────────────────────────────────────
+
+let activityTotalPages = 1;
+
+function formatIdle(sec) {
+    if (sec == null) return '—';
+    const s = Math.max(0, parseInt(sec, 10));
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    if (m < 60) return `${m}m ${r}s`;
+    const h = Math.floor(m / 60);
+    const mm = m % 60;
+    return `${h}h ${mm}m`;
+}
+
+async function loadActivity(page = 1) {
+    try {
+        activityPage = page;
+        let url = `/api/v1/activity?page=${activityPage}&limit=${activityLimit}`;
+        const device = $('activityDevice')?.value;
+        const search = $('activitySearch')?.value;
+        const fromVal = $('activityFrom')?.value;
+        const toVal = $('activityTo')?.value;
+
+        const toIso = (v) => {
+            if (!v) return null;
+            const d = new Date(v);
+            return isNaN(d.getTime()) ? null : d.toISOString();
+        };
+
+        if (device) url += `&device_id=${encodeURIComponent(device)}`;
+        if (search) url += `&search=${encodeURIComponent(search)}`;
+        const df = toIso(fromVal);
+        const dt = toIso(toVal);
+        if (df) url += `&date_from=${encodeURIComponent(df)}`;
+        if (dt) url += `&date_to=${encodeURIComponent(dt)}`;
+
+        const data = await api('GET', url);
+        const items = data.items || [];
+        const total = data.total || 0;
+        const limit = data.limit || activityLimit;
+        const pageResp = data.page || activityPage;
+
+        activityTotalPages = Math.max(1, Math.ceil(total / limit));
+        activityPage = pageResp;
+
+        if ($('activityTotal')) $('activityTotal').textContent = `${total} events`;
+        if ($('activityPageNumber')) $('activityPageNumber').textContent = String(activityPage);
+
+        const tbody = $('activityTableBody');
+        if (!tbody) return;
+
+        if (items.length === 0) {
+            tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><span class="ei">📭</span>No activity yet</div></td></tr>`;
+        } else {
+            tbody.innerHTML = items.map(i => {
+                const idle = formatIdle(i.idle_seconds);
+                const inputTxt = `${i.click_count || 0} clicks / ${i.keypress_count || 0} keys`;
+                const deviceLabel = (() => {
+                    const d = (_deviceCache || []).find(x => x.id === i.device_id);
+                    return d ? d.hostname : (i.device_id || '');
+                })();
+                return `<tr>
+                    <td>${formatDate(i.timestamp)}</td>
+                    <td>${escapeHtml(deviceLabel)}</td>
+                    <td>${escapeHtml(i.window_title || '—')}</td>
+                    <td>${escapeHtml(i.process_name || '—')}</td>
+                    <td>${idle}</td>
+                    <td>${inputTxt}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        if ($('activityPageInfo')) {
+            const startIdx = total === 0 ? 0 : ((activityPage - 1) * limit) + 1;
+            const endIdx = Math.min(activityPage * limit, total);
+            $('activityPageInfo').textContent = `${startIdx}-${endIdx} of ${total} results`;
+        }
+
+        if ($('btnActivityPrev')) $('btnActivityPrev').disabled = activityPage <= 1;
+        if ($('btnActivityNext')) $('btnActivityNext').disabled = activityPage >= activityTotalPages;
+    } catch (err) {
+        const tbody = $('activityTableBody');
+        if (tbody) tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><span class="ei">⚠️</span>${err.message || 'Failed to load activity'}</div></td></tr>`;
+    }
+}
+
+function activityPrevPage() {
+    if (activityPage > 1) loadActivity(activityPage - 1);
+}
+function activityNextPage() {
+    if (activityPage < activityTotalPages) loadActivity(activityPage + 1);
+}
+
 // ── Utilities ──────────────────────────────────────────────────────────────
 
 function formatDate(dateStr) {
@@ -1802,6 +1912,10 @@ async function pollAll() {
     await loadNotifyCampaigns();
     await fetchAllAdminsCount();
     if (selectedDeviceId) await refreshAdminList();
+    const activityView = document.getElementById('view-activity');
+    if (activityView && activityView.classList.contains('active')) {
+        await loadActivity(activityPage);
+    }
 }
 
 // Initial load
