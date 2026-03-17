@@ -587,6 +587,42 @@ tbody tr:hover { background: #f8fafc; transition: background 0.15s; }
 .si-bar-wrap { background: transparent; margin: 10px 0 2px; width: 100%; }
 .si-bar-fill { height: 8px; border-radius: 4px; background: #e2e8f0; overflow: hidden; }
 
+/* ── Installed Software ── */
+.software-toolbar {
+    display: flex; justify-content: space-between; align-items: center;
+    gap: 12px; margin-bottom: 14px; flex-wrap: wrap;
+}
+.software-toolbar input {
+    min-width: 260px; padding: 8px 10px; border: 1px solid var(--border);
+    border-radius: 8px; font-size: 13px;
+}
+.software-toolbar .muted-pill {
+    background: #f1f5f9; color: var(--text-2); padding: 6px 10px;
+    border-radius: 20px; font-size: 12px; border: 1px solid var(--border);
+}
+.software-table {
+    border: 1px solid var(--border); border-radius: var(--radius);
+    background: #ffffff; max-height: 60vh; overflow: auto;
+}
+.software-row {
+    display: grid; grid-template-columns: 2fr 1fr 1fr 120px 90px;
+    gap: 10px; padding: 10px 12px; align-items: center;
+    border-bottom: 1px solid #eef2f7; font-size: 13px;
+}
+.software-row.header {
+    position: sticky; top: 0; background: #0f172a; color: #fff;
+    font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+}
+.software-row:last-child { border-bottom: none; }
+.software-name { font-weight: 700; color: var(--text); }
+.software-publisher { color: var(--text-2); font-size: 12px; }
+.software-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.software-row .btn { padding: 6px 10px; height: 28px; }
+.badge-soft {
+    background: #e2e8f0; color: #0f172a; padding: 3px 8px;
+    border-radius: 10px; font-size: 11px; font-weight: 700;
+}
+
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }

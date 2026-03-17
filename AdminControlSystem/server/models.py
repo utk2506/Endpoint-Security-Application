@@ -36,6 +36,11 @@ class Device(Base):
     admin_snapshots = relationship("AdminSnapshot", back_populates="device")
     event_logs = relationship("EventLog", back_populates="device")
     notification_campaigns = relationship("NotificationCampaign", back_populates="device")
+    installed_software = relationship(
+        "InstalledSoftware",
+        back_populates="device",
+        cascade="all, delete-orphan",
+    )
 
     def __repr__(self):
         return f"<Device(id={self.id}, hostname='{self.hostname}')>"
@@ -94,6 +99,25 @@ class NotificationCampaign(Base):
 
     def __repr__(self):
         return f"<NotificationCampaign(id={self.id}, device_id={self.device_id})>"
+
+
+class InstalledSoftware(Base):
+    __tablename__ = "installed_software"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
+    name = Column(String(512), nullable=False)
+    version = Column(String(100), nullable=True)
+    publisher = Column(String(255), nullable=True)
+    install_date = Column(String(32), nullable=True)
+    uninstall_string = Column(Text, nullable=True)
+    last_seen = Column(DateTime, default=utcnow)
+    created_at = Column(DateTime, default=utcnow)
+
+    device = relationship("Device", back_populates="installed_software")
+
+    def __repr__(self):
+        return f"<InstalledSoftware(id={self.id}, device_id={self.device_id}, name='{self.name}')>"
 
 
 class EventLog(Base):

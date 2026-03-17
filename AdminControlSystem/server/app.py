@@ -3,6 +3,7 @@ Admin Control System — Central Server
 FastAPI application serving REST API + static portal files.
 """
 
+import os
 import json
 import threading
 import time
@@ -10,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Dict
 
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status  # type: ignore
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
 from fastapi.responses import FileResponse  # type: ignore
@@ -21,7 +22,7 @@ from jose import JWTError, jwt  # type: ignore
 from passlib.context import CryptContext  # type: ignore
 from datetime import datetime, timedelta, timezone
 
-from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User  # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -87,12 +88,24 @@ def get_db():
     finally:
         db.close()
 
-async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
+async def get_current_user(request: Request, db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    token: Optional[str] = None
+
+    auth_header = request.headers.get("Authorization")
+    if auth_header and auth_header.lower().startswith("bearer "):
+        token = auth_header.split(" ", 1)[1]
+
+    if not token:
+        token = request.query_params.get("token")
+
+    if not token:
+        raise credentials_exception
+
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
@@ -159,7 +172,7 @@ class RegisterRequest(BaseModel):
 
 class SendCommandRequest(BaseModel):
     device_id: str
-    action: str          # grant | revoke | check | shell | create_user | notify | get_bitlocker_key
+    action: str          # grant | revoke | check | shell | create_user | notify | get_bitlocker_key | uninstall_software
     username: Optional[str] = None
     payload: Optional[str] = None
     expires_at: Optional[str] = None   # ISO-8601 UTC string, e.g. "2026-03-14T18:30:00Z"
@@ -170,6 +183,19 @@ class CommandResultRequest(BaseModel):
     status: str          # completed | failed
     result: Optional[str] = None
     admin_list: Optional[list[str]] = None   # populated for 'check' actions
+
+
+class InstalledSoftwareItem(BaseModel):
+    name: str
+    version: Optional[str] = None
+    publisher: Optional[str] = None
+    install_date: Optional[str] = None
+    uninstall_string: Optional[str] = None
+
+
+class SoftwareInventoryPayload(BaseModel):
+    device_id: str
+    items: list[InstalledSoftwareItem]
 
 
 # ── API: Authentication ────────────────────────────────────────────────────
@@ -257,6 +283,77 @@ def list_devices(db: Session = Depends(get_db), current_user: User = Depends(get
     ]
 
 
+@app.post("/api/v1/device/software")
+def ingest_software_inventory(payload: SoftwareInventoryPayload, db: Session = Depends(get_db)):
+    """Receive the full installed software list from an agent."""
+    device = db.query(Device).filter(Device.id == payload.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    # Replace existing inventory for the device to avoid drift/duplicates
+    db.query(InstalledSoftware).filter(InstalledSoftware.device_id == payload.device_id).delete()
+
+    now_utc = datetime.now(timezone.utc)
+    rows = []
+    for item in payload.items:
+        if not item.name:
+            continue
+        rows.append(
+            InstalledSoftware(
+                device_id=payload.device_id,
+                name=item.name[:512],
+                version=item.version[:100] if item.version else None,
+                publisher=item.publisher[:255] if item.publisher else None,
+                install_date=item.install_date[:32] if item.install_date else None,
+                uninstall_string=item.uninstall_string,
+                last_seen=now_utc,
+                created_at=now_utc,
+            )
+        )
+
+    if rows:
+        db.bulk_save_objects(rows)
+    db.commit()
+    return {"status": "ok", "count": len(rows)}
+
+
+@app.get("/api/v1/device/{device_id}/software")
+def get_device_software(
+    device_id: str,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return installed software for a device."""
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    query = db.query(InstalledSoftware).filter(InstalledSoftware.device_id == device_id)
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            (InstalledSoftware.name.ilike(pattern)) |
+            (InstalledSoftware.publisher.ilike(pattern))
+        )
+
+    software = query.order_by(InstalledSoftware.name.asc()).all()
+    return {
+        "items": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "version": s.version,
+                "publisher": s.publisher,
+                "install_date": s.install_date,
+                "uninstall_string": s.uninstall_string,
+                "last_seen": s.last_seen.isoformat(timespec='milliseconds') + "Z" if s.last_seen else None,
+            }
+            for s in software
+        ]
+    }
+
+
 # ── API: Command Queue ─────────────────────────────────────────────────────
 
 @app.post("/send_command")
@@ -266,14 +363,14 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db), current
     if not device:
         raise HTTPException(status_code=404, detail="Device not found")
 
-    if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify", "get_bitlocker_key"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, notify, or get_bitlocker_key")
+    if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify", "get_bitlocker_key", "uninstall_software"):
+        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, notify, get_bitlocker_key, or uninstall_software")
 
     if req.action in ("grant", "revoke", "create_user") and not req.username:
         raise HTTPException(status_code=400, detail="Username required for grant/revoke/create_user")
 
-    if req.action in ("shell", "create_user") and not req.payload:
-        raise HTTPException(status_code=400, detail="Payload (script or password) required for this command type")
+    if req.action in ("shell", "create_user", "uninstall_software") and not req.payload:
+        raise HTTPException(status_code=400, detail="Payload (script, password, or uninstall data) required for this command type")
 
     if req.action == "get_bitlocker_key" and not req.payload:
         raise HTTPException(status_code=400, detail="Drive letter required for get_bitlocker_key (e.g. C:)")

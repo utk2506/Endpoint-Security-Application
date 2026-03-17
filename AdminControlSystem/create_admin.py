@@ -9,8 +9,9 @@ import sys
 import os
 import argparse
 
-# Add the server directory to path so we can import models
-sys.path.append(os.path.join(os.path.dirname(__file__), 'server'))
+# MUST change directory to server/ so that sqlite:///database.db resolves correctly
+os.chdir(os.path.join(os.path.dirname(__file__), 'server'))
+sys.path.append(os.getcwd())
 
 from models import SessionLocal, User  # type: ignore
 from app import get_password_hash  # type: ignore

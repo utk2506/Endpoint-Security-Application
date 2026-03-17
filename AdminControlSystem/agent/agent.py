@@ -35,6 +35,7 @@ from urllib import request, error, parse
 
 POLL_INTERVAL = 5  # seconds
 LOG_COLLECT_INTERVAL = 60  # seconds — how often to collect event logs
+SOFTWARE_REFRESH_INTERVAL = 600  # seconds — refresh installed software inventory
 
 # Cache to avoid repeatedly asking for BitLocker keys (which takes 5s per drive)
 _recovery_keys_cache = {}
@@ -272,6 +273,23 @@ def event_log_collector_thread(server_url, device_id, hostname):
         except Exception as e:
             log('ERROR', f"Event log collection error: {e}")
         time.sleep(LOG_COLLECT_INTERVAL)
+
+
+def software_inventory_thread(server_url, device_id):
+    """Background thread that periodically sends installed software inventory."""
+    log('INFO', f"📦 Software inventory sync started (interval: {SOFTWARE_REFRESH_INTERVAL}s)")
+    # Send one immediate snapshot on start
+    try:
+        push_software_inventory(server_url, device_id)
+    except Exception as e:
+        log('WARN', f"Initial software inventory failed: {e}")
+
+    while True:
+        try:
+            push_software_inventory(server_url, device_id)
+        except Exception as e:
+            log('WARN', f"Software inventory error: {e}")
+        time.sleep(SOFTWARE_REFRESH_INTERVAL)
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -521,6 +539,85 @@ $users = Get-LocalUser | Select-Object Name, Enabled | ForEach-Object {
     return []
 
 
+def collect_installed_software():
+    """Collect installed software from standard Windows uninstall registry hives."""
+    ps_script = r"""
+$ErrorActionPreference = 'SilentlyContinue'
+$paths = @(
+    'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall'
+)
+
+$apps = foreach ($path in $paths) {
+    if (Test-Path $path) {
+        Get-ChildItem $path | ForEach-Object {
+            $name = $_.GetValue('DisplayName')
+            if (-not $name) { return }
+
+            $isSystem = $_.GetValue('SystemComponent')
+            if ($isSystem -eq 1) { return }
+
+            $parent = $_.GetValue('ParentKeyName')
+            if ($parent) { return }
+
+            $release = $_.GetValue('ReleaseType')
+            if ($release -and $release -match 'Update|Hotfix') { return }
+
+            [PSCustomObject]@{
+                Name            = $name
+                Version         = $_.GetValue('DisplayVersion')
+                Publisher       = $_.GetValue('Publisher')
+                InstallDate     = $_.GetValue('InstallDate')
+                UninstallString = $_.GetValue('UninstallString')
+            }
+        }
+    }
+}
+
+$apps | Where-Object { $_ } | Sort-Object Name, Version -Unique | ConvertTo-Json -Compress
+"""
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
+            capture_output=True, text=True, timeout=40
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            if isinstance(data, dict):
+                data = [data]
+            cleaned = []
+            for item in data or []:
+                name = item.get('Name') or item.get('name')
+                if not name:
+                    continue
+                cleaned.append({
+                    "name": name,
+                    "version": item.get('Version') or item.get('version'),
+                    "publisher": item.get('Publisher') or item.get('publisher'),
+                    "install_date": item.get('InstallDate') or item.get('install_date'),
+                    "uninstall_string": item.get('UninstallString') or item.get('uninstall_string'),
+                })
+            return cleaned
+    except Exception as e:
+        log('WARN', f"collect_installed_software error: {e}")
+    return []
+
+
+def push_software_inventory(server, device_id):
+    """Collect and push installed software inventory to the server."""
+    items = collect_installed_software()
+    payload = {
+        "device_id": device_id,
+        "items": items or [],
+    }
+    resp = api_call(server, 'POST', '/api/v1/device/software', payload)
+    if resp and resp.get('status') == 'ok':
+        log('INFO', f"✓ Sent software inventory ({resp.get('count', 0)} items)")
+    else:
+        log('WARN', "Failed to send software inventory")
+
+
 def execute_create_user(username, password, dry_run=False):
     """Create a new local user account using PowerShell."""
     # We must construct a secure string for the password
@@ -625,6 +722,87 @@ def execute_shell(payload, dry_run=False):
         return False, "Shell command timed out (max 60s)"
     except Exception as e:
         return False, str(e)
+
+
+def execute_uninstall(payload, dry_run=False):
+    """Uninstall software using the provided uninstall string from the registry."""
+    try:
+        data = json.loads(payload) if payload else {}
+    except Exception:
+        data = {"uninstall_string": payload}
+
+    uninstall_cmd = data.get('uninstall_string') or data.get('command')
+    name = data.get('name') or 'target software'
+
+    if not uninstall_cmd:
+        return False, "No uninstall command provided by portal/agent"
+
+    # Make a best-effort to run silently if possible
+    cmd_to_run = uninstall_cmd.strip()
+    lower_cmd = cmd_to_run.lower()
+
+    def has_silent_flag(cmd: str) -> bool:
+        flags = ['/qn', '/quiet', '/q', '/s', '/silent', '/verysilent', '/passive']
+        return any(f in cmd.lower() for f in flags)
+
+    def split_path_args(cmd: str):
+        cmd = cmd.strip()
+        if cmd.startswith('"'):
+            end = cmd.find('"', 1)
+            exe = cmd[1:end] if end != -1 else cmd.strip('"')
+            rest = cmd[end + 1:].strip() if end != -1 else ''
+        else:
+            parts = cmd.split(' ', 1)
+            exe = parts[0]
+            rest = parts[1] if len(parts) > 1 else ''
+        return exe, rest
+
+    exe, args = split_path_args(cmd_to_run)
+
+    if 'msiexec' in exe.lower():
+        # Ensure uninstall with quiet flags
+        if (' /i' in args.lower()) and (' /x' not in args.lower()):
+            args = args.replace('/I', '/X').replace('/i', '/x')
+        if not has_silent_flag(args):
+            args = args + ' /qn /norestart'
+        exe = 'msiexec.exe'
+    else:
+        if not has_silent_flag(args):
+            args = args + ' /S /VERYSILENT /silent /quiet /norestart'
+        if '/s' not in args.lower():
+            args = args + ' /S'
+
+    # Build PowerShell Start-Process to avoid cmd quoting issues and hide window
+    def ps_quote(s: str) -> str:
+        return "'" + s.replace("'", "''") + "'"
+
+    ps_cmd = (
+        f"Start-Process -FilePath {ps_quote(exe)} "
+        f"-ArgumentList {ps_quote(args.strip())} "
+        f"-WindowStyle Hidden -Wait; exit $LASTEXITCODE"
+    )
+
+    if dry_run:
+        log('DRY-RUN', f"Would uninstall {name} using: {exe} {args}")
+        return True, f"Dry-run: would uninstall {name} via '{exe} {args}'"
+
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
+            capture_output=True,
+            text=True,
+            timeout=180
+        )
+        output = (result.stdout + result.stderr).strip()
+        success = result.returncode == 0
+        log('INFO' if success else 'WARN', f"Uninstall {name} → rc={result.returncode}")
+        if not output:
+            output = "Completed with no output."
+        return success, output
+    except subprocess.TimeoutExpired:
+        return False, f"Uninstall timed out for {name}"
+    except Exception as e:
+        return False, f"Uninstall failed: {e}"
 
 
 def execute_notify(payload, dry_run=False):
@@ -1044,6 +1222,17 @@ def main():
         si_thread = threading.Thread(target=sys_info_refresh_loop, daemon=True)
         si_thread.start()
 
+    # ── Start Software Inventory Background Thread ────────────────────────
+    if not dry_run:
+        sw_thread = threading.Thread(
+            target=software_inventory_thread,
+            args=(server, device_id),
+            daemon=True
+        )
+        sw_thread.start()
+    else:
+        log('DRY-RUN', "Skipping software inventory sync in dry-run mode.")
+
     # ── Polling loop ────────────────────────────────────────────────────
     log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
     log('INFO', f"Polling for commands every {POLL_INTERVAL}s…")
@@ -1104,6 +1293,10 @@ def main_loop(server, device_id, dry_run=False):
 
                 elif action == 'get_bitlocker_key':
                     success, output = execute_get_bitlocker_key(payload, dry_run)
+                    report_result(server, cmd_id, success, output)
+
+                elif action == 'uninstall_software':
+                    success, output = execute_uninstall(payload, dry_run)
                     report_result(server, cmd_id, success, output)
 
                 else:

@@ -96,6 +96,35 @@
     </div>
 </div>
 
+<!-- Installed Software Modal -->
+<div class="modal-overlay" id="softwareModal" onclick="closeSoftwareModal(event)">
+    <div class="modal-box size-lg" onclick="event.stopPropagation()">
+        <div class="modal-header">
+            <div class="modal-title-group">
+                <span>📦</span>
+                <span>Installed Software</span>
+                <span class="modal-sep">--</span>
+                <span id="swDeviceName" class="modal-hostname">—</span>
+            </div>
+            <button class="modal-close" onclick="closeSoftwareModal()">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="software-toolbar">
+                <div class="software-toolbar-left">
+                    <input id="softwareSearch" type="text" placeholder="Search name or publisher…" onkeydown="if(event.key==='Enter'){ loadSoftwareInventory(); }">
+                    <button class="btn btn-outline btn-sm" onclick="loadSoftwareInventory()">Refresh</button>
+                </div>
+                <div class="software-toolbar-right">
+                    <span id="swCount" class="muted-pill">0 items</span>
+                </div>
+            </div>
+            <div id="softwareTable" class="software-table">
+                <div class="empty-state"><span class="ei">⏳</span>Loading installed software…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- BitLocker Key Display Modal -->
 <div class="modal-overlay" id="bitlockerKeyModal" onclick="if(event.target===this) closeBitLockerKeyModal()">
     <div class="modal-box size-sm" onclick="event.stopPropagation()">
@@ -187,6 +216,7 @@
                 <option value="">— Select a device —</option>
             </select>
             <button class="btn btn-primary btn-sm" id="btnSysInfo" onclick="openSysInfoModal()" style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer; background:var(--blue); color:#fff; border:none; border-bottom:2px solid #0056b3; box-shadow:0 1px 3px rgba(0,0,0,0.1);">🖥️ System Info</button>
+            <button class="btn btn-outline btn-sm" id="btnSoftware" onclick="openSoftwareModal()" style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer;">📦 Installed Software</button>
         </div>
         <div class="conn-badge">
             <span class="conn-dot" id="connectionDot"></span>
@@ -531,7 +561,13 @@
 
 <!-- ──────────────── COMMAND HISTORY VIEW ──────────────── -->
 <div class="view" id="view-history">
-    <div class="page-header"><div class="page-title">📜 Command History</div></div>
+    <div class="page-header">
+        <div class="page-title">📜 Command History</div>
+        <div class="page-actions">
+            <button class="btn btn-outline btn-sm" id="btnExportCsv" onclick="downloadAuditExport('csv')">Export CSV</button>
+            <button class="btn btn-primary btn-sm" id="btnExportPdf" onclick="downloadAuditExport('pdf')">Export PDF</button>
+        </div>
+    </div>
     <div class="ops-card">
         <div class="ops-card-header">📜 Command History</div>
         <div class="ops-card-body">
