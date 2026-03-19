@@ -6,7 +6,7 @@ Uses SQLAlchemy ORM with SQLite.
 import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (  # type: ignore
-    Column, Integer, String, DateTime, Text, ForeignKey, Boolean, create_engine
+    Column, Integer, String, DateTime, Text, ForeignKey, Boolean, create_engine, text
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship  # type: ignore
 
@@ -29,8 +29,12 @@ class Device(Base):
     ip_address = Column(String(45), nullable=False)
     registered_at = Column(DateTime, default=utcnow)
     last_seen = Column(DateTime, default=utcnow)
+    last_version_check = Column(DateTime, nullable=True)
+    agent_version = Column(String(32), nullable=True)
+    install_path = Column(String(260), nullable=True)
     system_info = Column(Text, nullable=True)
     all_users = Column(Text, nullable=True)
+    is_uninstalled = Column(Boolean, default=False)
 
     commands = relationship("Command", back_populates="device")
     admin_snapshots = relationship("AdminSnapshot", back_populates="device")
@@ -43,6 +47,11 @@ class Device(Base):
     )
     activity_logs = relationship(
         "ActivityLog",
+        back_populates="device",
+        cascade="all, delete-orphan",
+    )
+    uninstall_passwords = relationship(
+        "UninstallPassword",
         back_populates="device",
         cascade="all, delete-orphan",
     )
@@ -163,6 +172,41 @@ class ActivityLog(Base):
         return f"<ActivityLog(id={self.id}, device_id={self.device_id}, process='{self.process_name}')>"
 
 
+class UninstallPassword(Base):
+    __tablename__ = "uninstall_passwords"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
+    otp_hash = Column(String(255), nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    used = Column(Boolean, default=False)
+    used_at = Column(DateTime, nullable=True)
+    issued_by = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    device = relationship("Device", back_populates="uninstall_passwords")
+
+    def __repr__(self):
+        return f"<UninstallPassword(device_id={self.device_id}, expires_at={self.expires_at}, used={self.used})>"
+
+
+class AgentVersion(Base):
+    __tablename__ = "agent_versions"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    version = Column(String(32), unique=True, nullable=False)
+    platform = Column(String(32), default="windows")
+    download_path = Column(Text, nullable=False)
+    checksum_sha256 = Column(String(128), nullable=False)
+    release_notes = Column(Text, nullable=True)
+    is_active = Column(Boolean, default=True)
+    file_size = Column(Integer, nullable=True)
+    created_at = Column(DateTime, default=utcnow)
+
+    def __repr__(self):
+        return f"<AgentVersion(version='{self.version}', platform='{self.platform}', active={self.is_active})>"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -178,3 +222,22 @@ class User(Base):
 
 # Create all tables on import
 Base.metadata.create_all(bind=engine)
+
+
+# ── Lightweight migrations for new columns on existing SQLite DBs ─────────
+
+def _ensure_column(table: str, column: str, ddl: str):
+    """Add a column if it does not already exist (SQLite only)."""
+    try:
+        with engine.begin() as conn:
+            cols = [row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))]
+            if column not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
+    except Exception:
+        # Silent fail to avoid blocking startup; manual migration remains possible.
+        pass
+
+
+_ensure_column("devices", "agent_version", "VARCHAR(32)")
+_ensure_column("devices", "last_version_check", "DATETIME")
+_ensure_column("devices", "install_path", "VARCHAR(260)")

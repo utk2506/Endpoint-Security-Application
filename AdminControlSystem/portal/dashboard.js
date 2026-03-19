@@ -8,6 +8,8 @@ const WS_BASE = window.location.origin.replace('http', 'ws');
 let selectedDeviceId = null;
 let pollInterval = null;
 let _deviceCache = [];  // cache of all devices with their all_users payload
+let _latestAgentVersion = null;
+let _lastVersionFetch = 0;
 let activityPage = 1;
 let activityLimit = 20;
 
@@ -72,7 +74,7 @@ function applyViewerRestrictions() {
     // All action buttons that are admin-only
     const adminOnlyIds = [
         'btnGrant', 'btnRevoke', 'btnCheck', 'sendShellBtn', 'openTerminalBtn',
-        'btnCreateUser', 'sendNotificationBtn'
+        'btnCreateUser', 'sendNotificationBtn', 'btnGenerateOtp', 'btnUploadVersion'
     ];
     adminOnlyIds.forEach(id => {
         const el = document.getElementById(id);
@@ -133,14 +135,14 @@ async function api(method, path, body = null) {
     const token = localStorage.getItem('token');
     const opts = {
         method,
-        headers: { 
+        headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${token}`
         },
     };
     if (body) opts.body = JSON.stringify(body);
     const res = await fetch(`${API_BASE}${path}`, opts);
-    
+
     if (res.status === 401) {
         localStorage.removeItem('token');
         window.location.href = '/portal/login.html';
@@ -174,9 +176,9 @@ function formatDate(dateStr) {
     if (!dateStr) return '—';
     const d = new Date(dateStr);
     if (isNaN(d.getTime())) return '—';
-    const day   = String(d.getDate()).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
-    const year  = d.getFullYear();
+    const year = d.getFullYear();
     let hoursNum = d.getHours();
     const ampm = hoursNum >= 12 ? 'PM' : 'AM';
     hoursNum = hoursNum % 12 || 12;
@@ -184,6 +186,17 @@ function formatDate(dateStr) {
     const mins = String(d.getMinutes()).padStart(2, '0');
     const secs = String(d.getSeconds()).padStart(2, '0');
     return `${day}/${month}/${year} ${hoursStr}:${mins}:${secs} ${ampm}`;
+}
+
+function semverCompare(a, b) {
+    const pa = (a || '').split('.').map(n => parseInt(n, 10) || 0);
+    const pb = (b || '').split('.').map(n => parseInt(n, 10) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+        if ((pa[i] || 0) > (pb[i] || 0)) return 1;
+        if ((pa[i] || 0) < (pb[i] || 0)) return -1;
+    }
+    return 0;
 }
 
 function escapeHtml(str) {
@@ -246,13 +259,17 @@ async function loadDevices() {
         const evtFilterSelect = $('evtFilterDevice');
         const blDeviceSelect = $('bitlockerDevice'); // Add bitlocker device select
         const activitySelect = $('activityDevice');
-        
+        const otpSelect = $('otpDeviceSelect');
+        const patchSelect = $('patchDeviceSelect');
+
         const currentVal = select.value;
         const currentFilterVal = filterSelect ? filterSelect.value : '';
         const currentEvtFilterVal = evtFilterSelect ? evtFilterSelect.value : '';
         const currentBlVal = blDeviceSelect ? blDeviceSelect.value : '';
         const currentActVal = activitySelect ? activitySelect.value : '';
-        
+        const currentOtpVal = otpSelect ? otpSelect.value : '';
+        const currentPatchVal = patchSelect ? patchSelect.value : '';
+
         select.innerHTML = '<option value="">— Select a device —</option>';
         if (filterSelect) {
             filterSelect.innerHTML = '<option value="">All Devices</option>';
@@ -266,14 +283,21 @@ async function loadDevices() {
         if (activitySelect) {
             activitySelect.innerHTML = '<option value="">All devices</option>';
         }
+        if (otpSelect) {
+            otpSelect.innerHTML = '<option value=\"\">— Select a device —</option>';
+        }
+        if (patchSelect) {
+            patchSelect.innerHTML = '<option value=\"\">All devices</option>';
+        }
 
         const now = new Date();
         devices.forEach(d => {
             const lastSeen = new Date(d.last_seen);
             const diff = now - lastSeen;
             // Online if seen in last 30s, or seen up to 1 min in the "future" (clock drift)
-            const isOnline = diff < 30000 && diff > -60000; 
-            const statusIcon = isOnline ? '🟢' : '🔴';
+            const isOnline = !d.is_uninstalled && diff < 30000 && diff > -60000;
+            const isUninstalled = d.is_uninstalled;
+            const statusIcon = isUninstalled ? '⬜' : (isOnline ? '🟢' : '🔴');
 
             const opt = document.createElement('option');
             opt.value = d.id;
@@ -307,6 +331,20 @@ async function loadDevices() {
                 aOpt.textContent = `${d.hostname} (${d.ip_address})`;
                 activitySelect.appendChild(aOpt);
             }
+
+            if (otpSelect) {
+                const o = document.createElement('option');
+                o.value = d.id;
+                o.textContent = `${d.hostname} (${d.ip_address})`;
+                otpSelect.appendChild(o);
+            }
+
+            if (patchSelect) {
+                const p = document.createElement('option');
+                p.value = d.id;
+                p.textContent = `${d.hostname} (${d.ip_address})`;
+                patchSelect.appendChild(p);
+            }
         });
 
         if (currentVal && Array.from(select.options).some(o => o.value === currentVal)) select.value = currentVal;
@@ -314,6 +352,8 @@ async function loadDevices() {
         if (evtFilterSelect && currentEvtFilterVal) evtFilterSelect.value = currentEvtFilterVal;
         if (blDeviceSelect && currentBlVal) blDeviceSelect.value = currentBlVal;
         if (activitySelect && currentActVal) activitySelect.value = currentActVal;
+        if (otpSelect && currentOtpVal) otpSelect.value = currentOtpVal;
+        if (patchSelect && currentPatchVal) patchSelect.value = currentPatchVal;
 
         // Rebuild notify device list checkboxes
         const notifyList = $('notifyDeviceList');
@@ -347,13 +387,13 @@ async function loadDevices() {
         }
 
         // ── Helper: Update Notify Selected Count ──────────────────────────────────
-function updateNotifyCount() {
-    const checked = document.querySelectorAll('.notify-target-device:checked').length;
-    const counter = $('notifyTargetCount');
-    if (counter) counter.textContent = checked;
-}
+        function updateNotifyCount() {
+            const checked = document.querySelectorAll('.notify-target-device:checked').length;
+            const counter = $('notifyTargetCount');
+            if (counter) counter.textContent = checked;
+        }
 
-// Restore selection
+        // Restore selection
         if (currentVal) select.value = currentVal;
         if (currentFilterVal && filterSelect) filterSelect.value = currentFilterVal;
         if (currentEvtFilterVal && evtFilterSelect) evtFilterSelect.value = currentEvtFilterVal;
@@ -368,6 +408,7 @@ function updateNotifyCount() {
                 renderSysInfo($('sysInfoBody'), activeDevice.system_info);
             }
         }
+        renderPatchStatus();
 
     } catch {
         setConnected(false);
@@ -418,7 +459,7 @@ function updateCommandButtons() {
     const select = $('userSelect');
     const btnGrant = $('btnGrant');
     const btnRevoke = $('btnRevoke');
-    
+
     if (!select || !btnGrant || !btnRevoke) return;
 
     const username = select.value;
@@ -533,7 +574,7 @@ async function submitCreateUser() {
             username: username,
             payload: password
         });
-        
+
         toast(`Create command queued for "${username}"`, 'success');
         closeCreateUserModal();
         loadHistory();
@@ -616,10 +657,10 @@ async function sendNotification() {
     if (isRecurring) {
         if (!etInput) { toast('End Time is required for recurring campaigns', 'error'); return; }
         if (isNaN(interval) || interval < 1) { toast('Invalid interval', 'error'); return; }
-        
+
         let st = stInput ? new Date(stInput) : new Date();
         let et = new Date(etInput);
-        
+
         payload.start_time = st.toISOString();
         payload.end_time = et.toISOString();
         payload.interval_minutes = interval;
@@ -666,7 +707,7 @@ async function loadNotifyCampaigns() {
                 console.warn(`Failed to fetch for ${devId}`, innerErr);
             }
         }
-        
+
         tbody.innerHTML = '';
         if (allCampaigns.length === 0) {
             tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state" style="padding:15px; font-size:12px;">No active campaigns found.</div></td></tr>`;
@@ -687,7 +728,7 @@ async function loadNotifyCampaigns() {
             `;
             tbody.appendChild(tr);
         }
-    } catch(e) { 
+    } catch (e) {
         console.error("loadNotifyCampaigns failed", e);
         tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state" style="padding:15px; font-size:12px; color:var(--danger);">Error loading campaigns.</div></td></tr>`;
     }
@@ -699,7 +740,7 @@ async function cancelNotifyCampaign(id) {
         await api('DELETE', `/api/v1/notifications/${id}`);
         toast('Campaign cancelled', 'success');
         loadNotifyCampaigns();
-    } catch(e) {
+    } catch (e) {
         toast(e.message, 'error');
     }
 }
@@ -832,7 +873,7 @@ function openTerminal() {
             const key = e.key.toLowerCase();
             // Let native Ctrl+C copy text if there is an active selection
             if (key === 'c' && term.hasSelection()) {
-                return false; 
+                return false;
             }
             // If Ctrl+C (no selection) OR Ctrl+X, explicitly send an interrupt/cancel signal (\x03)
             if (key === 'c' || key === 'x') {
@@ -993,12 +1034,12 @@ function changePage(delta) {
 async function loadHistory() {
     try {
         let url = `/commands/history?limit=${historyLimit}&page=${currentHistoryPage}&sort_by=${encodeURIComponent(sortColumn)}&sort_dir=${encodeURIComponent(sortDirection)}`;
-        
+
         const device = $('filterDevice')?.value;
         const action = $('filterAction')?.value;
         const status = $('filterStatus')?.value;
         const search = $('filterSearch')?.value;
-        
+
         if (device) url += `&device_id=${encodeURIComponent(device)}`;
         if (action) url += `&action=${encodeURIComponent(action)}`;
         if (status) url += `&status=${encodeURIComponent(status)}`;
@@ -1006,16 +1047,16 @@ async function loadHistory() {
 
         const data = await api('GET', url);
         const history = data.commands || [];
-        
+
         // Auto-refresh detection:
         // If the current selected device has any commands that just reached 'completed', refresh admin list
         if (selectedDeviceId) {
-            const completedRecently = history.filter(c => 
-                c.device_id == selectedDeviceId && 
+            const completedRecently = history.filter(c =>
+                c.device_id == selectedDeviceId &&
                 c.status === 'completed' &&
                 ['grant', 'revoke', 'check', 'create_user'].includes(c.action)
             );
-            
+
             // If we find completed missions that haven't been "seen" by our current state yet, refresh
             // We use the ID to avoid double-refreshing within the same poll cycle
             if (completedRecently.length > 0) {
@@ -1084,7 +1125,7 @@ async function loadHistory() {
         tbody.innerHTML = history.map(c => {
             const actionIcons = { grant: '✅', revoke: '🚫', check: '🔍', shell: '💻', create_user: '👤', notify: '📢' };
             const statusClass = `badge-${c.status}`;
-            
+
             let actionText = c.action;
             if (c.action === 'grant') {
                 if (c.expires_at) {
@@ -1482,13 +1523,13 @@ function formatDate(dateStr) {
     const day = String(d.getDate()).padStart(2, '0');
     const month = String(d.getMonth() + 1).padStart(2, '0');
     const year = d.getFullYear();
-    
+
     let hoursNum = d.getHours();
     const ampm = hoursNum >= 12 ? 'PM' : 'AM';
     hoursNum = hoursNum % 12;
     hoursNum = hoursNum ? hoursNum : 12; // the hour '0' should be '12'
     const hoursStr = String(hoursNum).padStart(2, '0');
-    
+
     const mins = String(d.getMinutes()).padStart(2, '0');
     const secs = String(d.getSeconds()).padStart(2, '0');
     return `${day}/${month}/${year} ${hoursStr}:${mins}:${secs} ${ampm}`;
@@ -1506,7 +1547,7 @@ function escapeHtml(str) {
 
 function openLogDetailsModal(evt) {
     if (!evt) return;
-    
+
     // Populate modal fields
     if ($('logModalEventId')) $('logModalEventId').textContent = evt.event_id || '—';
     if ($('logModalSource')) {
@@ -1514,17 +1555,17 @@ function openLogDetailsModal(evt) {
         const sourceBadgeColors = { Security: 'var(--danger)', System: 'var(--warning)', Application: 'var(--accent)' };
         $('logModalSource').style.color = sourceBadgeColors[evt.log_source] || 'var(--text-secondary)';
     }
-    
+
     let timeStr = evt.timestamp;
     if (timeStr && !timeStr.endsWith('Z')) timeStr += 'Z';
     const time = formatDate(timeStr);
     if ($('logModalTime')) $('logModalTime').textContent = time;
-    
+
     if ($('logModalDevice')) $('logModalDevice').textContent = evt.hostname || '—';
     if ($('logModalUser')) $('logModalUser').textContent = evt.username || '—';
-    
+
     if ($('logModalMessage')) $('logModalMessage').textContent = evt.message || 'No additional details provided.';
-    
+
     // Show modal
     const modal = $('logDetailsModal');
     if (modal) modal.classList.add('show');
@@ -1548,15 +1589,19 @@ function openSysInfoModal() {
     const device = _deviceCache.find(d => d.id == deviceId);
     const hostname = device ? device.hostname : deviceId;
     document.getElementById('sysInfoDeviceName').textContent = hostname;
-    
+
     // Set status badge
     const badgeEl = document.getElementById('sysInfoStatusBadge');
     if (badgeEl && device) {
-        const diff = Date.now() - new Date(device.last_seen);
-        const isOn = device.last_seen && diff < 30 * 1000 && diff > -60 * 1000;
-        badgeEl.innerHTML = isOn 
-            ? `<span class="badge badge-completed"><span class="badge-dot"></span>Online</span>`
-            : `<span class="badge badge-failed"><span class="badge-dot"></span>Offline</span>`;
+        if (device.is_uninstalled) {
+            badgeEl.innerHTML = `<span class="badge" style="background:rgba(150,150,150,0.15);color:#aaa;border:1px solid rgba(150,150,150,0.3);"><span class="badge-dot" style="background:#aaa"></span>Uninstalled</span>`;
+        } else {
+            const diff = Date.now() - new Date(device.last_seen);
+            const isOn = device.last_seen && diff < 30 * 1000 && diff > -60 * 1000;
+            badgeEl.innerHTML = isOn
+                ? `<span class="badge badge-completed"><span class="badge-dot"></span>Online</span>`
+                : `<span class="badge badge-failed"><span class="badge-dot"></span>Offline</span>`;
+        }
     } else if (badgeEl) {
         badgeEl.innerHTML = '';
     }
@@ -1608,11 +1653,11 @@ function renderSysInfo(container, info, deviceId) {
         const blStatus = d.bitlocker || '0% (Off)';
         const convStatus = d.bl_status || 'Ready';
         const isEncrypted = blStatus.toLowerCase().includes('on') || (blStatus.includes('%') && !blStatus.startsWith('0%'));
-        
+
         const blColor = isEncrypted ? 'var(--success)' : 'var(--text-secondary)';
         const blIcon = isEncrypted ? '🔒' : '🔓';
 
-        const keyBtn = isEncrypted ? 
+        const keyBtn = isEncrypted ?
             `<button class="btn btn-sm" style="margin-top:10px; width:100%; justify-content:center; background:var(--bg); border:1px solid var(--accent); color:var(--accent); font-weight:700;" 
                      onclick="getBitLockerKey('${deviceId}', '${escapeAttr(d.drive)}')">🔑 Get Recovery Key</button>` : '';
 
@@ -1845,7 +1890,7 @@ async function getBitLockerKey(deviceId, driveLetter) {
             document.getElementById('bkModalDevice').textContent = cachedDevice.hostname;
             document.getElementById('bkModalDrive').textContent = driveLetter;
             document.getElementById('bkModalKey').textContent = recoveryKey;
-            
+
             document.getElementById('bitlockerKeyModal').classList.add('show');
         }
     } catch (e) {
@@ -1869,6 +1914,136 @@ async function getBitLockerKeyStandalone() {
 
     getBitLockerKey(deviceId, drive);
     driveInput.value = '';
+}
+
+// ── Maintenance / Patch Management ─────────────────────────────────────────
+
+async function generateOtpForDevice() {
+    const deviceId = $('otpDeviceSelect')?.value;
+    if (!deviceId) return;
+
+    const btn = $('btnGenerateOtp');
+    const original = btn ? btn.textContent : '';
+    try {
+        if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+        const res = await api('POST', '/generate-uninstall-password', { device_id: deviceId });
+        const exp = res.expires_at ? new Date(res.expires_at).toLocaleTimeString() : '5 minutes';
+        if ($('otpResultText')) $('otpResultText').textContent = `OTP: ${res.otp} (expires ${exp})`;
+        toast('OTP generated', 'success');
+    } catch (e) {
+        toast(e.message || 'Failed to generate OTP', 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = original; }
+    }
+}
+
+function renderPatchStatus() {
+    const panel = $('patchStatusBox');
+    if (!panel) return;
+    const select = $('patchDeviceSelect');
+    const deviceId = (select && select.value) || selectedDeviceId;
+    if (!deviceId) {
+        panel.innerHTML = '<div class="empty-state" style="padding:10px;">Select a device to view patch status.</div>';
+        return;
+    }
+    const device = (_deviceCache || []).find(d => d.id == deviceId);
+    if (!device) {
+        panel.innerHTML = '<div class="empty-state" style="padding:10px;">Device not found.</div>';
+        return;
+    }
+
+    const version = device.agent_version || 'Not reported';
+    const lastCheck = device.last_version_check ? formatDate(device.last_version_check) : '—';
+    let badge = '<span class="badge badge-pending"><span class="badge-dot"></span>Unknown</span>';
+    if (_latestAgentVersion && device.agent_version) {
+        const cmp = semverCompare(_latestAgentVersion, device.agent_version);
+        if (cmp <= 0) {
+            badge = '<span class="badge badge-completed"><span class="badge-dot"></span>Up to date</span>';
+        } else {
+            badge = '<span class="badge badge-failed"><span class="badge-dot"></span>Update available</span>';
+        }
+    }
+
+    panel.innerHTML = `
+        <div class="sysinfo-row"><span>Agent version</span><strong>${version}</strong></div>
+        <div class="sysinfo-row"><span>Last version check</span><strong>${lastCheck}</strong></div>
+        <div class="sysinfo-row"><span>Status</span>${badge}</div>
+        <div class="sysinfo-row"><span>Latest release</span><strong>${_latestAgentVersion || '—'}</strong></div>
+    `;
+}
+
+function renderVersionTable(items = []) {
+    if ($('latestVersionLabel')) $('latestVersionLabel').textContent = _latestAgentVersion || '—';
+    const tbody = $('versionTableBody');
+    if (!tbody) return;
+    if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state">No agent builds uploaded yet.</div></td></tr>';
+        return;
+    }
+    const toMb = (b) => b ? `${(b / 1024 / 1024).toFixed(1)} MB` : '—';
+    tbody.innerHTML = items.map(v => `
+        <tr>
+            <td>${v.version}</td>
+            <td>${v.platform || 'windows'}</td>
+            <td>${formatDate(v.created_at)}</td>
+            <td>${toMb(v.file_size)}</td>
+            <td>${v.is_active ? 'Active' : 'Archived'}</td>
+        </tr>
+    `).join('');
+}
+
+async function loadAgentVersions(force = false) {
+    const now = Date.now();
+    if (!force && now - _lastVersionFetch < 60000) return;
+    try {
+        const res = await api('GET', '/api/v1/admin/agent-versions');
+        _lastVersionFetch = now;
+        const items = res.items || [];
+        _latestAgentVersion = items.length ? items[0].version : null;
+        renderVersionTable(items);
+        renderPatchStatus();
+    } catch (e) {
+        console.error('loadAgentVersions error:', e);
+    }
+}
+
+async function uploadAgentVersion(evt) {
+    if (evt) evt.preventDefault();
+    const version = $('uploadVersionInput')?.value?.trim();
+    const file = $('uploadFileInput')?.files?.[0];
+    const notes = $('uploadNotesInput')?.value || '';
+    if (!version || !file) {
+        toast('Version and binary are required', 'error');
+        return;
+    }
+    const btn = $('btnUploadVersion');
+    const original = btn ? btn.textContent : '';
+    try {
+        if (btn) { btn.disabled = true; btn.textContent = 'Uploading…'; }
+        const fd = new FormData();
+        fd.append('version', version);
+        fd.append('file', file);
+        if (notes) fd.append('release_notes', notes);
+        const token = localStorage.getItem('token');
+        const res = await fetch(`${API_BASE}/api/v1/admin/agent-version`, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}` },
+            body: fd,
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Upload failed');
+        }
+        toast('Agent update uploaded', 'success');
+        $('uploadVersionInput').value = '';
+        $('uploadFileInput').value = '';
+        $('uploadNotesInput').value = '';
+        await loadAgentVersions(true);
+    } catch (e) {
+        toast(e.message || 'Upload failed', 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = original; }
+    }
 }
 
 // ── Dashboard Data ─────────────────────────────────────────────────────────
@@ -1916,6 +2091,11 @@ async function pollAll() {
     if (activityView && activityView.classList.contains('active')) {
         await loadActivity(activityPage);
     }
+    const maintenanceView = document.getElementById('view-maintenance');
+    if (maintenanceView && maintenanceView.classList.contains('active')) {
+        await loadAgentVersions();
+        renderPatchStatus();
+    }
 }
 
 // Initial load
@@ -1924,3 +2104,85 @@ pollAll();
 
 // Auto-refresh every 5 seconds
 pollInterval = setInterval(pollAll, 5000);
+
+
+// ── Protected Uninstall OTP ──────────────────────────────────────────────
+
+let _otpCountdownTimer = null;
+let _currentOtpCode = '';
+
+async function generateOtpForDevice() {
+    const deviceId = $('otpDeviceSelect')?.value;
+    if (!deviceId) { toast('Please select a target device', 'error'); return; }
+
+    const btn = $('btnGenerateOtp');
+    const original = btn ? btn.textContent : '';
+    try {
+        if (btn) { btn.disabled = true; btn.textContent = 'Generating…'; }
+        const res = await api('POST', '/generate-uninstall-password', { device_id: deviceId });
+        _currentOtpCode = res.otp || '';
+
+        const device = _deviceCache.find(d => d.id == deviceId);
+        const lbl = $('otpDeviceLabel');
+        if (lbl) lbl.textContent = device ? ('Device: ' + device.hostname + '  (' + device.ip_address + ')') : ('Device ID: ' + deviceId);
+
+        const display = $('otpCodeDisplay');
+        if (display) { display.textContent = _currentOtpCode; display.style.color = 'var(--accent)'; }
+
+        clearInterval(_otpCountdownTimer);
+        let secsLeft = 5 * 60;
+        const tick = () => {
+            const el = $('otpCountdown');
+            if (!el) return;
+            const m = Math.floor(secsLeft / 60);
+            const s = String(secsLeft % 60).padStart(2, '0');
+            el.textContent = m + ':' + s;
+            el.style.color = secsLeft <= 60 ? 'var(--red)' : 'var(--text)';
+            if (secsLeft <= 0) {
+                clearInterval(_otpCountdownTimer);
+                el.textContent = 'Expired';
+                el.style.color = 'var(--red)';
+                if (display) { display.textContent = '------'; display.style.color = 'var(--text-3)'; }
+            }
+            secsLeft--;
+        };
+        tick();
+        _otpCountdownTimer = setInterval(tick, 1000);
+
+        const modal = $('otpModal');
+        if (modal) modal.classList.add('show');
+
+        toast('OTP generated for ' + (device ? device.hostname : deviceId), 'success');
+    } catch (e) {
+        toast(e.message || 'Failed to generate OTP', 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = original; }
+    }
+}
+
+function closeOtpModal() {
+    const modal = $('otpModal');
+    if (modal) modal.classList.remove('show');
+    clearInterval(_otpCountdownTimer);
+}
+
+function copyOtp() {
+    navigator.clipboard.writeText(_currentOtpCode).then(() => {
+        toast('OTP copied to clipboard', 'success');
+    }).catch(() => {
+        toast('Copy failed. OTP: ' + _currentOtpCode, 'info');
+    });
+}
+
+// ── Delete Uninstalled Device from Portal ────────────────────────────────────
+
+async function deleteDeviceFromPortal(deviceId, hostname) {
+    if (!confirm(`Permanently delete "${hostname}" from the portal?\n\nThis cannot be undone. The device record, command history, and event logs will all be removed.`)) return;
+    try {
+        await api('DELETE', `/devices/${deviceId}`);
+        toast(`Device "${hostname}" has been permanently removed.`, 'success');
+        await loadDevices();
+    } catch (e) {
+        toast(`Failed to delete: ${e.message}`, 'error');
+    }
+}
