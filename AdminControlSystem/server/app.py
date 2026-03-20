@@ -731,13 +731,8 @@ def get_activity(
         except Exception:
             pass
 
-    if date_to:
-        try:
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp <= dt)
         except Exception:
             pass
-
     total = query.count()
     items = (
         query.order_by(ActivityLog.timestamp.desc())
@@ -757,6 +752,7 @@ def get_activity(
                 "timestamp": a.timestamp.isoformat(timespec='milliseconds') + "Z" if a.timestamp else None,
                 "window_title": a.window_title,
                 "process_name": a.process_name,
+                "username": a.username,
                 "idle_seconds": a.idle_seconds,
                 "click_count": a.click_count,
                 "keypress_count": a.keypress_count,
@@ -764,6 +760,62 @@ def get_activity(
             for a in items
         ],
     }
+
+from sqlalchemy import func
+
+@app.get("/api/v1/activity/stats")
+def get_activity_stats(
+    device_id: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregate statistics for activity Pie Charts and layout summaries."""
+    query = db.query(ActivityLog)
+    if device_id:
+        query = query.filter(ActivityLog.device_id == device_id)
+    if date_from:
+        try:
+            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp >= df)
+        except Exception: pass
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp <= dt)
+        except Exception: pass
+
+    # Use database-level aggregation for efficiency on large "Enterprise" datasets
+    all_logs = query.all()
+    device_ids = set()
+    total_idle = 0
+    apps = {}
+    users = {} # Track time per user
+    
+    for log_entry in all_logs:
+        device_ids.add(log_entry.device_id)
+        # Cap idle time at 15s for this sample. 
+        log_idle = min(15, log_entry.idle_seconds or 0)
+        total_idle += log_idle
+        
+        # App time is the remaining time in this 15s slice
+        proc = log_entry.process_name or "Unknown"
+        uname = log_entry.username or "Unknown"
+
+        if log_idle < 15:
+            active_portion = 15 - log_idle
+            apps[proc] = apps.get(proc, 0) + active_portion
+            users[uname] = users.get(uname, 0) + active_portion
+
+    return {
+        "total_idle_seconds": int(total_idle),
+        "total_duration_seconds": len(all_logs) * 15,
+        "device_count": len(device_ids),
+        "process_distribution": apps,
+        "user_distribution": users
+    }
+
 
 
 # ── API: Command Queue ─────────────────────────────────────────────────────

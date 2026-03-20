@@ -321,7 +321,16 @@ async function loadDevices() {
             if (blDeviceSelect) {
                 const bOpt = document.createElement('option');
                 bOpt.value = d.id;
-                bOpt.textContent = `${d.hostname} (${d.ip_address})`;
+                
+                let isEncrypted = false;
+                if (d.system_info && d.system_info !== 'null') {
+                    const infoStr = typeof d.system_info === 'string' ? d.system_info : JSON.stringify(d.system_info);
+                    isEncrypted = infoStr.includes('Protection On') || infoStr.includes('Percentage Encrypted');
+                }
+                
+                bOpt.textContent = `${d.hostname} (${d.ip_address}) ${isEncrypted ? '🔐' : ''}`;
+                if (isEncrypted) bOpt.style.fontWeight = 'bold';
+                
                 blDeviceSelect.appendChild(bOpt);
             }
 
@@ -1435,6 +1444,106 @@ function formatIdle(sec) {
     return `${h}h ${mm}m`;
 }
 
+let statusRingInstance = null;
+let appUsageBarInstance = null;
+
+function renderStatusRing(active, idle) {
+    const ctx = document.getElementById('statusRingChart');
+    if (!ctx) return;
+    if (statusRingInstance) statusRingInstance.destroy();
+
+    const total = active + idle;
+    const activePerc = total > 0 ? ((active / total) * 100).toFixed(0) : 0;
+    if (document.getElementById('activePercentageText')) {
+        document.getElementById('activePercentageText').textContent = activePerc + '%';
+    }
+
+    statusRingInstance = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Active', 'Idle'],
+            datasets: [{
+                data: [active, idle],
+                backgroundColor: ['#4633ff', 'rgba(0,0,0,0.05)'],
+                borderWidth: 0,
+                hoverOffset: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '80%',
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(c) {
+                            return `${c.label}: ${formatIdle(c.raw)}`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function renderAppUsageBarChart(labelMap) {
+    const ctx = document.getElementById('appUsageBarChart');
+    if (!ctx) return;
+    if (appUsageBarInstance) appUsageBarInstance.destroy();
+
+    const sorted = Object.entries(labelMap)
+        .filter(([k]) => k.toLowerCase() !== 'idle')
+        .sort((a,b) => b[1] - a[1])
+        .slice(0, 8);
+
+    const labels = sorted.map(x => x[0]);
+    const data = sorted.map(x => x[1]);
+
+    appUsageBarInstance = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Usage Time',
+                data: data,
+                backgroundColor: 'rgba(70, 51, 255, 0.8)',
+                borderRadius: 5,
+                borderWidth: 0,
+                barThickness: 15
+            }]
+        },
+        options: {
+            indexAxis: 'y',
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(c) {
+                            return `Focus Time: ${formatIdle(c.raw)}`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: {
+                    display: false,
+                    grid: { display: false }
+                },
+                y: {
+                    grid: { display: false },
+                    ticks: {
+                        color: 'var(--text-3)',
+                        font: { size: 11 }
+                    }
+                }
+            }
+        }
+    });
+}
+
 async function loadActivity(page = 1) {
     try {
         activityPage = page;
@@ -1460,6 +1569,80 @@ async function loadActivity(page = 1) {
         const data = await api('GET', url);
         const items = data.items || [];
         const total = data.total || 0;
+
+        // ── Fetch Analytics Stats & Render Chart ──
+        let statsUrl = `/api/v1/activity/stats?`;
+        if (device) statsUrl += `device_id=${encodeURIComponent(device)}&`;
+        
+        let statsDf = df;
+        if (!statsDf) {
+            const yesterday = new Date();
+            yesterday.setHours(yesterday.getHours() - 24);
+            statsDf = yesterday.toISOString();
+        }
+        statsUrl += `date_from=${encodeURIComponent(statsDf)}&`;
+        if (dt) statsUrl += `date_to=${encodeURIComponent(dt)}&`;
+        
+        try {
+            const stats = await api('GET', statsUrl);
+            const idleSec = stats.total_idle_seconds || 0;
+            const deviceCount = stats.device_count || 1;
+
+            let activeSec = 0;
+            const labelMap = stats.process_distribution || {};
+
+            for (const [proc, sec] of Object.entries(labelMap)) {
+                if (proc.toLowerCase() !== 'idle') {
+                    activeSec += sec;
+                }
+            }
+
+            if ($('statIdleTime')) $('statIdleTime').textContent = formatIdle(idleSec);
+            if ($('statActiveTime')) $('statActiveTime').textContent = formatIdle(activeSec);
+
+            if ($('activityDeviceCount')) {
+                if (deviceCount > 1) {
+                    $('activityDeviceCount').textContent = `${deviceCount} Devices`;
+                    $('activityDeviceCount').style.display = 'inline-block';
+                } else {
+                    $('activityDeviceCount').style.display = 'none';
+                }
+            }
+
+            renderStatusRing(activeSec, idleSec);
+            renderAppUsageBarChart(labelMap);
+
+            // ── Populating Detailed Breakdown Table ──
+            const detailsBody = document.getElementById('activityDetailsBody');
+            if (detailsBody) {
+                const groupedApps = Object.entries(labelMap)
+                    .filter(([p]) => p.toLowerCase() !== 'idle')
+                    .sort((a,b) => b[1] - a[1]);
+
+                if (groupedApps.length === 0) {
+                    detailsBody.innerHTML = '<tr><td colspan="3"><div class="empty-state">No app activity recorded.</div></td></tr>';
+                } else {
+                    const windowMap = {};
+                    items.forEach(it => {
+                        const p = it.process_name || 'Unknown';
+                        if (!windowMap[p]) windowMap[p] = new Set();
+                        if (it.window_title) windowMap[p].add(it.window_title);
+                    });
+
+                    detailsBody.innerHTML = groupedApps.map(([proc, sec]) => {
+                        const titles = Array.from(windowMap[proc] || []).slice(0, 3).join(', ');
+                        const titlesDisp = titles ? `<small style="color:var(--text-3)">${escapeHtml(titles)}</small>` : '—';
+                        return `<tr>
+                            <td><strong>${escapeHtml(proc)}</strong></td>
+                            <td>${titlesDisp}</td>
+                            <td><span class="badge badge-info">${formatIdle(sec)}</span></td>
+                        </tr>`;
+                    }).join('');
+                }
+            }
+        } catch (e) {
+            console.error("Stats fetching failed", e);
+        }
         const limit = data.limit || activityLimit;
         const pageResp = data.page || activityPage;
 
@@ -1501,6 +1684,17 @@ async function loadActivity(page = 1) {
 
         if ($('btnActivityPrev')) $('btnActivityPrev').disabled = activityPage <= 1;
         if ($('btnActivityNext')) $('btnActivityNext').disabled = activityPage >= activityTotalPages;
+
+        // ── Auto-Refresh for Live Enterprise Monitoring ──
+        if (!window._activityRefreshInterval) {
+            window._activityRefreshInterval = setInterval(() => {
+                const view = document.getElementById('view-activity');
+                if (view && view.style.display !== 'none') {
+                    // Refresh current page without resetting pagination
+                    loadActivity(activityPage); 
+                }
+            }, 30000); // 30-second live refresh
+        }
     } catch (err) {
         const tbody = $('activityTableBody');
         if (tbody) tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><span class="ei">⚠️</span>${err.message || 'Failed to load activity'}</div></td></tr>`;
@@ -1871,7 +2065,8 @@ async function getBitLockerKey(deviceId, driveLetter) {
             return;
         }
 
-        const info = typeof cachedDevice.system_info === 'string' ? JSON.parse(cachedDevice.system_info) : cachedDevice.system_info;
+        const infoStr = cachedDevice.system_info;
+        const info = (typeof infoStr === 'string' && infoStr !== 'null') ? JSON.parse(infoStr) : (infoStr || {});
         const disks = Array.isArray(info.disks) ? info.disks : (info.disks ? [info.disks] : []);
         const targetDisk = disks.find(d => d.drive === driveLetter);
 
@@ -1884,7 +2079,51 @@ async function getBitLockerKey(deviceId, driveLetter) {
         if (!recoveryKey || recoveryKey === 'Not Encrypted' || recoveryKey === 'Not encrypted') {
             toast(`Drive ${driveLetter} is not BitLocker encrypted`, 'info');
         } else if (recoveryKey === 'Not found' || recoveryKey.startsWith('Failed') || (typeof recoveryKey === 'string' && recoveryKey.includes('Key not found'))) {
-            toast(`Key not yet synced. The agent is fetching it.`, 'warning');
+            toast(`Requesting live BitLocker key from agent...`, 'info');
+            try {
+                const res = await api('POST', '/send_command', {
+                    device_id: targetId,
+                    action: 'get_bitlocker_key',
+                    payload: driveLetter
+                });
+                const cmdId = res.command_id;
+                toast(`Command sent! Waiting for agent to respond...`, 'info');
+                
+                let attempts = 0;
+                const maxAttempts = 20; // up to 30 seconds
+                const pollTimer = setInterval(async () => {
+                    attempts++;
+                    try {
+                        const hist = await api('GET', `/commands/history?device_id=${encodeURIComponent(targetId)}&action=get_bitlocker_key&limit=5`);
+                        if (hist && hist.commands) {
+                            const cmd = hist.commands.find(c => c.id === cmdId);
+                            if (cmd) {
+                                if (cmd.status === 'completed' || cmd.status === 'failed') {
+                                    clearInterval(pollTimer);
+                                    if (cmd.status === 'completed') {
+                                        toast(`BitLocker key retrieved successfully!`, 'success');
+                                        document.getElementById('bkModalDevice').textContent = cachedDevice.hostname;
+                                        document.getElementById('bkModalDrive').textContent = driveLetter;
+                                        document.getElementById('bkModalKey').textContent = cmd.result || 'Unknown result';
+                                        document.getElementById('bitlockerKeyModal').classList.add('show');
+                                    } else {
+                                        toast(`Agent failed to retrieve key: ${cmd.result}`, 'error');
+                                    }
+                                    return;
+                                }
+                            }
+                        }
+                    } catch(e) { console.error('Poll error', e); }
+                    
+                    if (attempts >= maxAttempts) {
+                        clearInterval(pollTimer);
+                        toast(`Timed out waiting for agent. Please check Command History later.`, 'warning');
+                    }
+                }, 1500);
+
+            } catch (err) {
+                toast(`Failed to send request: ${err.message}`, 'error');
+            }
         } else {
             // Populate and show custom modal
             document.getElementById('bkModalDevice').textContent = cachedDevice.hostname;

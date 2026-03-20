@@ -162,6 +162,7 @@ class ActivityLog(Base):
     timestamp = Column(DateTime, default=utcnow, index=True)
     window_title = Column(Text, nullable=True)
     process_name = Column(String(260), nullable=True)
+    username = Column(String(255), nullable=True)
     idle_seconds = Column(Integer, default=0)
     click_count = Column(Integer, default=0)
     keypress_count = Column(Integer, default=0)

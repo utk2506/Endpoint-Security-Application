@@ -16,6 +16,16 @@ import os
 import socket
 import ctypes
 from ctypes import wintypes
+HAS_PYWINPTY = False
+try:
+    from winpty import PtyProcess, Backend
+    HAS_PYWINPTY = True
+except ImportError:
+    try:
+        from pywinpty import PtyProcess, Backend
+        HAS_PYWINPTY = True
+    except ImportError:
+        pass
 import subprocess
 import sys
 import time
@@ -41,6 +51,7 @@ import websockets  # type: ignore
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+CREATE_DEFAULT_ERROR_MODE = getattr(subprocess, "CREATE_DEFAULT_ERROR_MODE", 0)
 WINDLL = getattr(ctypes, "windll", None)
 
 
@@ -48,6 +59,19 @@ if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # pyre-ignore[16]
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # pyre-ignore[16]
+    except Exception:
+        pass
+
+if sys.platform == "win32" and WINDLL:
+    try:
+        hwnd = WINDLL.kernel32.GetConsoleWindow()
+        if hwnd:
+            WINDLL.user32.ShowWindow(hwnd, 0) # SW_HIDE
+        # Suppress Windows error dialog boxes for child processes (e.g., broken PowerShell)
+        SEM_FAILCRITICALERRORS = 0x0001
+        SEM_NOGPFAULTERRORBOX = 0x0002
+        SEM_NOOPENFILEERRORBOX = 0x8000
+        WINDLL.kernel32.SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX)
     except Exception:
         pass
 
@@ -63,11 +87,13 @@ def is_admin():
 
 # ── Configuration ───────────────────────────────────────────────────────────
 
-AGENT_VERSION = "1.1.5"
+AGENT_VERSION = "1.1.18"
 SERVICE_NAME = "YourAgent"
 DEFAULT_INSTALL_DIR = r"C:\\Program Files\\YourAgent"
 STATE_FILE = "agent_state.json"
 UPDATE_STAGING_DIR = "updates"
+SWAP_LOCK_FILE = "agent_swap.lock"
+NOTIFY_QUEUE_FILE = "notify_queue.json"
 UPDATE_MIN_INTERVAL = 5  # seconds (reduced for testing)
 UPDATE_MAX_INTERVAL = 10  # seconds (reduced for testing)
 WATCHDOG_INTERVAL = 8      # seconds
@@ -205,6 +231,9 @@ class EventLogCollector:
 
     def _query_log(self, log_source, event_ids):
         """Use PowerShell Get-WinEvent to retrieve events since last timestamp."""
+        if not powershell_available():
+            log('WARN', f"Skipping {log_source} event collection: PowerShell unavailable.")
+            return []
         last_ts = self.state.get(log_source, "")
         event_ids_set = set(event_ids)
         start_clause = f"; StartTime=(Get-Date '{last_ts}')" if last_ts else ""
@@ -338,9 +367,14 @@ def log(level, message):
     line = f"[{ts}] [{level}]  {message}"
     print(line, flush=True)
     try:
-        # Write to a file so we can view logs from elevated windows
-        # Use absolute path to avoid writing to System32 when elevated
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_debug.log')
+        # Determine log path safely
+        exe_dir = Path(os.path.dirname(os.path.abspath(sys.executable)))
+        log_path = Path(os.environ.get("TEMP", ".")) / "agent_debug.log"
+        
+        # If we are in Program Files, try to write there (usually requires admin)
+        if "Program Files" in str(exe_dir):
+            log_path = exe_dir / "agent_debug.log"
+            
         with open(log_path, 'a', encoding='utf-8') as f:
             f.write(line + '\n')
     except:
@@ -356,6 +390,23 @@ def runtime_root() -> Path:
 
 def state_file_path() -> Path:
     return runtime_root() / STATE_FILE
+
+
+def notify_queue_path() -> Path:
+    """Queue file lives in ProgramData so both service (SYSTEM) and users can access it."""
+    base = Path(os.environ.get("PROGRAMDATA", r"C:\\ProgramData")) / "YourAgent"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        # Grant Users modify rights so a standard user session can pop items
+        subprocess.run(
+            ["icacls", str(base), "/grant", "Users:(OI)(CI)M", "/T", "/Q"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW
+        )
+    except Exception:
+        pass
+    return base / NOTIFY_QUEUE_FILE
 
 
 def load_state() -> dict:
@@ -379,6 +430,40 @@ def update_state(**kwargs):
     save_state(state)
 
 
+def enqueue_notification(message: str):
+    """Persist a notification so a user-session tray process can display it."""
+    try:
+        path = notify_queue_path()
+        queue = []
+        if path.exists():
+            queue = json.loads(path.read_text(encoding="utf-8"))
+        queue.append({
+            "message": message,
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+        })
+        path.write_text(json.dumps(queue, indent=2), encoding="utf-8")
+        log("INFO", "Notification queued for interactive session.")
+    except Exception as e:
+        log("WARN", f"Could not queue notification: {e}")
+
+
+def dequeue_notification() -> str | None:
+    """Pop the oldest queued notification (if any)."""
+    try:
+        path = notify_queue_path()
+        if not path.exists():
+            return None
+        queue = json.loads(path.read_text(encoding="utf-8"))
+        if not queue:
+            return None
+        item = queue.pop(0)
+        path.write_text(json.dumps(queue, indent=2), encoding="utf-8")
+        return item.get("message")
+    except Exception as e:
+        log("WARN", f"Could not read notification queue: {e}")
+        return None
+
+
 def compute_sha256(path: Path) -> str:
     h = hashlib.sha256()
     with open(path, "rb") as f:
@@ -396,6 +481,9 @@ _ssl_context = None
 AGENT_AUTH_TOKEN = None
 PINNED_CERT_SHA256 = None
 LAST_SYNC_TS = None
+_POWERSHELL_OK: bool | None = None
+_POWERSHELL_LAST_CHECK: float = 0.0  # timestamp of last check
+_POWERSHELL_CACHE_TTL: float = 60.0  # re-check every 60 seconds
 
 
 def _check_cert_pin(response):
@@ -410,6 +498,30 @@ def _check_cert_pin(response):
     except Exception as e:
         log("ERROR", f"Certificate pinning failed: {e}")
         raise
+
+
+def powershell_available() -> bool:
+    """Lightweight check to avoid crashing dialogs when PowerShell is broken.
+    Re-checks every 60 seconds so a transient failure doesn't permanently disable PS."""
+    global _POWERSHELL_OK, _POWERSHELL_LAST_CHECK
+    now = time.time()
+    if _POWERSHELL_OK is not None and (now - _POWERSHELL_LAST_CHECK) < _POWERSHELL_CACHE_TTL:
+        return _POWERSHELL_OK
+    try:
+        result = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', 'exit'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE,
+            timeout=5,
+        )
+        _POWERSHELL_OK = result.returncode == 0
+    except Exception:
+        _POWERSHELL_OK = False
+    _POWERSHELL_LAST_CHECK = now
+    if not _POWERSHELL_OK:
+        log('WARN', "PowerShell unavailable or failing to start; related features disabled.")
+    return _POWERSHELL_OK
 
 
 def api_call(base_url, method, path, body=None, headers=None, timeout=15):
@@ -539,8 +651,9 @@ def download_binary(url: str, dest_path: Path):
 def schedule_binary_swap(staged_path: Path, service_name: str):
     """Swap the current binary with the staged one via a detached PowerShell helper."""
     target = current_binary_path()
-    backup = target.with_name(f"{target.stem}_backup{target.suffix}")
+    backup = target.with_name(f"{target.stem}_old_{int(time.time())}{target.suffix}")
     helper = staged_path.with_suffix(".ps1")
+    
     script = rf"""
 $ErrorActionPreference = 'SilentlyContinue'
 $source = '{staged_path}'
@@ -549,16 +662,26 @@ $backup = '{backup}'
 $service = '{service_name}'
 $procName = [System.IO.Path]::GetFileNameWithoutExtension($target)
 
-# Stop service + any stray agent/watchdog processes to release the file lock
+# Clean up ANY older backup files to save disk space
+Write-Output "Cleaning up previous backups..."
+Get-ChildItem (Split-Path $target) -Filter "$procName`_old_*" | ForEach-Object {{
+    Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
+}}
+
+# Stop service + any stray agent processes to release file locks
+Write-Output "Stopping service $service..."
 Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
 Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name "$procName`_old_*" -ErrorAction SilentlyContinue | Stop-Process -Force
 
-# Retry the copy a few times in case the file handle lingers
+Write-Output "Swapping binary..."
 $copied = $false
 for ($i = 0; $i -lt 10; $i++) {{
     try {{
         Start-Sleep -Seconds 1
+        # Backup running binary
         Copy-Item $target $backup -Force
+        # Place new binary
         Copy-Item $source $target -Force
         $copied = $true
         break
@@ -568,9 +691,11 @@ for ($i = 0; $i -lt 10; $i++) {{
 }}
 
 if ($copied) {{
+    Write-Output "Starting binary / service..."
     if (Get-Service -Name $service -ErrorAction SilentlyContinue) {{
         Start-Service -Name $service -ErrorAction SilentlyContinue
     }} else {{
+        # Fallback to direct execution
         Start-Process -FilePath $target
     }}
 }}
@@ -578,16 +703,20 @@ if ($copied) {{
 Remove-Item $source -Force -ErrorAction SilentlyContinue
 Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 """
-    helper.write_text(script, encoding="utf-8")
-    flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-    subprocess.Popen(
-        ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=flags,
-    )
-    log("INFO", "Update helper launched; exiting for binary swap…")
-    os._exit(0)
+    try:
+        helper.write_text(script, encoding="utf-8")
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        subprocess.Popen(
+            ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=flags,
+        )
+        log("INFO", "Update helper launched; exiting for binary swap…")
+        os._exit(0)
+    except Exception as e:
+        log("ERROR", f"Failed to launch update helper: {e}")
+
 
 
 def update_poll_loop(server_url: str, device_id: str, service_name: str, install_root: Path):
@@ -597,12 +726,13 @@ def update_poll_loop(server_url: str, device_id: str, service_name: str, install
         wait_s = random.randint(UPDATE_MIN_INTERVAL, UPDATE_MAX_INTERVAL)
         time.sleep(wait_s)
         try:
-            resp = api_call(server_url, "GET", f"/agent/version?device_id={device_id}&current_version={AGENT_VERSION}")
-            if not resp or not isinstance(resp, dict) or not resp.get("update_available"):
+            resp_data = api_call(server_url, "GET", f"/agent/version?device_id={device_id}&current_version={AGENT_VERSION}")
+            if not isinstance(resp_data, dict) or not resp_data.get("update_available"):
                 continue
-            download_url = resp.get("download_url")
-            checksum = resp.get("checksum_sha256")
-            new_version = resp.get("version")
+            
+            download_url = cast(str, resp_data.get("download_url"))
+            checksum = cast(str, resp_data.get("checksum_sha256"))
+            new_version = cast(str, resp_data.get("version"))
             if not download_url or not new_version:
                 continue
 
@@ -626,17 +756,17 @@ def start_watchdog_process(server_url: str, service_name: str):
     """Spawn a lightweight watchdog to restart the agent if killed."""
     try:
         exe = current_binary_path()
-            flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
-            cmd = [
-                str(exe),
-                "--watchdog",
-                f"--parent-pid={os.getpid()}",
-                f"--server={server_url}",
+        flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+        cmd = [
+            str(exe),
+            "--watchdog",
+            f"--parent-pid={os.getpid()}",
+            f"--server={server_url}",
             f"--service-name={service_name}",
         ]
         if AGENT_AUTH_TOKEN:
             cmd.append(f"--token={AGENT_AUTH_TOKEN}")
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
         log("INFO", "Watchdog process spawned.")
     except Exception as e:
         log("WARN", f"Failed to start watchdog: {e}")
@@ -645,8 +775,29 @@ def start_watchdog_process(server_url: str, service_name: str):
 def watchdog_loop(parent_pid: int, service_name: str, server_url: str):
     """Runs in watchdog mode."""
     log("INFO", f"Watchdog guarding PID {parent_pid}")
+    install_root = current_binary_path().parent
+    lock_file = install_root / SWAP_LOCK_FILE
+
+    # Clean up any stale lock file from a previous failed swap attempt
+    # (if the swap script crashed before removing the lock, we clear it here)
+    if lock_file.exists():
+        # Only clear it if parent is alive — if parent is already gone, the
+        # swap helper is likely still running so we should respect the lock
+        if parent_pid and psutil.pid_exists(parent_pid):
+            try:
+                lock_file.unlink()
+                log("INFO", "Cleared stale swap lock file on watchdog startup.")
+            except Exception:
+                pass
+
     while True:
         if parent_pid and not psutil.pid_exists(parent_pid):
+            # Check for swap lock before restarting
+            if lock_file.exists():
+                log("INFO", "Agent stopped but swap in progress. Watchdog idling...")
+                time.sleep(WATCHDOG_INTERVAL * 2)
+                continue
+
             log("WARN", "Primary agent stopped — attempting restart.")
             restart_service(service_name)
             if not is_service_running(service_name):
@@ -655,11 +806,12 @@ def watchdog_loop(parent_pid: int, service_name: str, server_url: str):
                     cmd = [str(exe), "--server", server_url]
                     if AGENT_AUTH_TOKEN:
                         cmd.append(f"--token={AGENT_AUTH_TOKEN}")
-                    subprocess.Popen(cmd, creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                    subprocess.Popen(cmd, stdin=subprocess.DEVNULL, creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
                 except Exception:
                     pass
             parent_pid = 0  # prevent tight loop
         time.sleep(WATCHDOG_INTERVAL)
+
 
 
 def tamper_guard_loop(service_name: str):
@@ -678,7 +830,7 @@ def tamper_guard_loop(service_name: str):
             pass
 
 
-def protected_uninstall_flow(server_url: str, otp: str | None, service_name: str, install_root: Path):
+def protected_uninstall_flow(server_url: str, otp: str | None, service_name: str, install_root: Path, verify_only: bool = False):
     """Verify OTP with backend and uninstall service + files."""
     state = load_state()
     device_id = state.get("device_id")
@@ -699,7 +851,15 @@ def protected_uninstall_flow(server_url: str, otp: str | None, service_name: str
         log("ERROR", "Cannot determine device ID; uninstall aborted.")
         return False
 
-    code = otp or input("Enter uninstall OTP from admin portal: ").strip()
+    if otp:
+        code = otp.strip()
+    else:
+        import tkinter as tk
+        from tkinter import simpledialog
+        root = tk.Tk()
+        root.withdraw()
+        code = simpledialog.askstring("Uninstall Authorization", "Enter uninstall OTP from admin portal:")
+        
     if not code:
         log("ERROR", "OTP is required for uninstall.")
         return False
@@ -710,15 +870,126 @@ def protected_uninstall_flow(server_url: str, otp: str | None, service_name: str
         "hostname": get_hostname(),
     })
     if not resp or resp.get("status") != "ok":
-        log("ERROR", "Uninstall blocked: invalid or expired OTP.")
+        detail = resp.get("detail") if resp else "No response from server"
+        log("ERROR", f"Uninstall blocked: invalid or expired OTP. {detail}")
         return False
+
+    if verify_only:
+        log("INFO", "OTP validated successfully. (verify_only=True)")
+        return True
 
     log("INFO", "OTP validated. Stopping service and removing files…")
     stop_service(service_name)
     try:
         safe_root = str(install_root).lower()
         if "youragent" in safe_root:
-            shutil.rmtree(install_root, ignore_errors=True)
+            if not powershell_available():
+                log("WARN", "PowerShell unavailable; using Python fallback for uninstall cleanup.")
+                # 1) Kill processes
+                for proc_name in ["agent.exe", "agent", "nssm.exe", "nssm"]:
+                    try:
+                        subprocess.run(["taskkill", "/F", "/IM", proc_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE)
+                    except Exception:
+                        pass
+                time.sleep(3)  # Wait for processes to fully terminate
+                # 2) Delete service via sc
+                try:
+                    subprocess.run(["sc", "stop", service_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE)
+                    time.sleep(2)
+                    subprocess.run(["sc", "delete", service_name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE)
+                except Exception:
+                    pass
+                # 3) Remove install dir with retries
+                for attempt in range(5):
+                    try:
+                        if install_root.exists():
+                            shutil.rmtree(install_root, ignore_errors=True)
+                        if not install_root.exists():
+                            break
+                        time.sleep(3)
+                    except Exception as e:
+                        log("WARN", f"Failed to remove install dir (attempt {attempt+1}): {e}")
+                        time.sleep(3)
+                # 4) Clean registry
+                try:
+                    import winreg
+                    for hive, path in [
+                        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\YourAgent"),
+                        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\YourAgent"),
+                    ]:
+                        try:
+                            winreg.DeleteKey(winreg.ConnectRegistry(None, hive), path)
+                        except Exception:
+                            pass
+                    try:
+                        key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_ALL_ACCESS)
+                        winreg.DeleteValue(key, "YourAgentTray")
+                        key.Close()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    log("WARN", f"Registry cleanup fallback failed: {e}")
+            else:
+                ps_script = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+# 1. Stop and Delete Windows Service
+Stop-Service -Name "{service_name}" -Force
+sc.exe stop "{service_name}"
+Start-Sleep -Seconds 2
+sc.exe delete "{service_name}"
+
+# 2. Kill all related processes
+$procs = @("agent", "nssm", "winpty-agent")
+foreach ($p in $procs) {{
+    Get-Process -Name $p -ErrorAction SilentlyContinue | Stop-Process -Force
+}}
+
+# 3. Wait for handles to release
+Start-Sleep -Seconds 3
+
+# 4. Remove installation directory with retries
+for ($i=0; $i -lt 5; $i++) {{
+    if (Test-Path "{install_root}") {{
+        Remove-Item "{install_root}" -Recurse -Force
+        if (!(Test-Path "{install_root}")) {{ break }}
+        Start-Sleep -Seconds 3
+    }} else {{ break }}
+}}
+
+# 5. Clean registry entries
+Remove-Item -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\YourAgent" -Recurse -Force
+Remove-Item -Path "HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\YourAgent" -Recurse -Force
+Remove-ItemProperty -Path "HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run" -Name "YourAgentTray" -ErrorAction SilentlyContinue
+"""
+                # Write script to temp file and run it (avoids cmd-line quoting issues)
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.ps1', delete=False, mode='w', encoding='utf-8') as tf:
+                    tf.write(ps_script)
+                    ps_temp_path = tf.name
+
+                log("INFO", f"Running uninstall cleanup script: {ps_temp_path}")
+                try:
+                    # Run synchronously with timeout so we know if cleanup succeeded
+                    result = subprocess.run(
+                        ['powershell', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-File', ps_temp_path],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE,
+                        timeout=60,
+                    )
+                    log("INFO", f"Uninstall script exited with code {result.returncode}")
+                    if result.stderr:
+                        log("DEBUG", f"Uninstall script stderr: {result.stderr.decode('utf-8', errors='replace')[:500]}")
+                except subprocess.TimeoutExpired:
+                    log("WARN", "Uninstall cleanup script timed out (60s) — cleanup may be incomplete.")
+                except Exception as e:
+                    log("WARN", f"Uninstall cleanup script error: {e}")
+                finally:
+                    try:
+                        os.remove(ps_temp_path)
+                    except Exception:
+                        pass
         else:
             log("WARN", f"Install path '{install_root}' does not look safe to delete; skipped.")
     except Exception as e:
@@ -746,6 +1017,13 @@ def collect_system_info():
     """Collect hardware & OS telemetry using a single PowerShell script.
     Returns a dict ready to be JSON-serialised and sent to the server.
     """
+    if not powershell_available():
+        # Minimal fallback info without PowerShell to avoid popup errors
+        return {
+            "os": platform.platform(),
+            "hostname": get_hostname(),
+            "ip": get_ip(),
+        }
     ps_script = r"""
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -831,7 +1109,8 @@ $result | ConvertTo-Json -Depth 4 -Compress
     try:
         result = subprocess.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
-            capture_output=True, text=True, timeout=30
+            capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout.strip())
@@ -894,7 +1173,7 @@ def execute_get_bitlocker_key(drive_letter, dry_run=False):
 
     try:
         # Run with elevated privileges (admin check is done at agent start)
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
         if result.returncode == 0:
             output = result.stdout
             log('INFO', f"✓ BitLocker key retrieved for {drive}")
@@ -923,7 +1202,7 @@ $users = Get-LocalUser | Select-Object Name, Enabled | ForEach-Object {
     try:
         result = subprocess.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
-            capture_output=True, text=True, timeout=15
+            capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout.strip())
@@ -977,7 +1256,7 @@ $apps | Where-Object { $_ } | Sort-Object Name, Version -Unique | ConvertTo-Json
     try:
         result = subprocess.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_script],
-            capture_output=True, text=True, timeout=40
+            capture_output=True, text=True, timeout=40, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
         )
         if result.returncode == 0 and result.stdout.strip():
             data = json.loads(result.stdout.strip())
@@ -1063,12 +1342,35 @@ def _get_foreground_window_info():
         return None, None
 
 
+class LASTINPUTINFO(ctypes.Structure):
+    _fields_ = [('cbSize', wintypes.UINT), ('dwTime', wintypes.DWORD)]
+
+_activity_counts = {"clicks": 0, "keys": 0}
+
+def _start_input_listeners():
+    """Start pynput background threads for click and key counts."""
+    try:
+        from pynput import mouse, keyboard
+        def on_click(x, y, button, pressed):
+            if pressed:
+                _activity_counts["clicks"] += 1
+
+        def on_press(key):
+            _activity_counts["keys"] += 1
+
+        mouse_listener = mouse.Listener(on_click=on_click)
+        key_listener = keyboard.Listener(on_press=on_press)
+        
+        mouse_listener.start()
+        key_listener.start()
+        log('INFO', "Input listeners (pynput) started for activity tracking.")
+    except Exception as e:
+        log('WARN', f"Could not start activity pynput listeners: {e}")
+
 def _get_idle_seconds():
     if not WINDLL:
         return 0
     try:
-        class LASTINPUTINFO(ctypes.Structure):
-            _fields_ = [('cbSize', wintypes.UINT), ('dwTime', wintypes.DWORD)]
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
         if WINDLL.user32.GetLastInputInfo(ctypes.byref(lii)):
@@ -1083,19 +1385,39 @@ def collect_activity_sample():
     """Collect a single user activity sample."""
     title, proc_name = _get_foreground_window_info()
     idle = _get_idle_seconds()
-    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+    clicks = _activity_counts["clicks"]
+    keys = _activity_counts["keys"]
+    
+    # Reset counts for the next interval
+    _activity_counts["clicks"] = 0
+    _activity_counts["keys"] = 0
+    
+    from datetime import timezone
+    import os
+    now_dt = datetime.now(timezone.utc)
+    now_str = str(now_dt.isoformat(timespec='milliseconds'))
+    now_iso = f"{now_str}Z".replace("+00:00", "")
+    
+    # Get current username
+    try:
+        current_user = os.getlogin()
+    except Exception:
+        current_user = os.environ.get('USERNAME') or "Unknown"
+
     return {
         "timestamp": now_iso,
+        "username": current_user,
         "window_title": title or "",
         "process_name": proc_name or "",
         "idle_seconds": idle,
-        "click_count": 0,
-        "keypress_count": 0,
+        "click_count": clicks,
+        "keypress_count": keys,
     }
 
 
 def activity_sampler_thread(server, device_id):
     log('INFO', f"🧭 Activity sampler started (interval: {ACTIVITY_INTERVAL}s)")
+    _start_input_listeners()
     while True:
         try:
             sample = collect_activity_sample()
@@ -1121,7 +1443,7 @@ def execute_create_user(username, password, dry_run=False):
     # Execute, but if it fails don't log the raw command so password doesn't leak in agent log
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15
+            cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
         )
         output = (result.stdout + result.stderr).strip()
         success = result.returncode == 0
@@ -1165,7 +1487,7 @@ def execute_check(dry_run=False):
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15
+            cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
         )
         output = (result.stdout + result.stderr).strip()
         success = result.returncode == 0
@@ -1197,10 +1519,11 @@ def execute_shell(payload, dry_run=False):
         log('DRY-RUN', f"Would run shell payload:\n{payload}")
         return True, f"Dry-run mode. Payload length: {len(payload)}"
 
-    cmd = ['powershell', '-NoProfile', '-NonInteractive', '-Command', payload]
+    assert isinstance(payload, str)
+    cmd_list: List[str] = ['powershell', '-NoProfile', '-NonInteractive', '-Command', payload]
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=60
+            cmd_list, capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
         )
         output = (result.stdout + result.stderr).strip()
         success = result.returncode == 0
@@ -1279,7 +1602,9 @@ def execute_uninstall(payload, dry_run=False):
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps_cmd],
             capture_output=True,
             text=True,
-            timeout=180
+            timeout=180,
+            stdin=subprocess.DEVNULL,
+            creationflags=CREATE_NO_WINDOW
         )
         output = (result.stdout + result.stderr).strip()
         success = result.returncode == 0
@@ -1313,6 +1638,14 @@ def execute_notify(payload, dry_run=False):
 
 def execute_modern_notify(message):
     """Launch a styled WPF notification window via PowerShell, with session handling."""
+    if not powershell_available():
+        log('WARN', "PowerShell unavailable; falling back to msg.exe notification.")
+        try:
+            subprocess.run(['msg', '*', message], capture_output=True, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE)
+            return True, "PowerShell unavailable; used msg.exe fallback."
+        except Exception as e:
+            return False, f"Notification failed (no PowerShell): {e}"
+
     # Detect session
     session_id = 0
     try:
@@ -1323,11 +1656,9 @@ def execute_modern_notify(message):
         pass
 
     if session_id == 0:
-        log('WARN', "Agent is in Session 0 (Services). UI cannot be displayed to the user.")
-        log('INFO', "Falling back to 'msg *' for global notification.")
-        # Fallback to msg.exe which can sometimes reach sessions from 0
-        subprocess.run(['msg', '*', message], capture_output=True)
-        return True, "Agent in Session 0. Used 'msg *' fallback."
+        # Service context cannot display UI; queue for the tray process running in a user session.
+        enqueue_notification(message)
+        return True, "Agent is running as a service; notification queued for user session."
 
     # Escape for use inside a C# string literal
     safe_msg = message.replace('\\', '\\\\').replace('"', '\\"')
@@ -1446,7 +1777,7 @@ public class ChimeraNotifyWin {{
         cmd = ['powershell', '-Sta', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', temp_path]
 
         def _run():
-            res = subprocess.run(cmd, capture_output=True, text=True)
+            res = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
             if res.returncode != 0:
                 log('ERROR', f"Notification PowerShell failed (code {res.returncode})")
                 log('DEBUG', f"PS Error: {res.stderr[:500]}")
@@ -1472,7 +1803,7 @@ def _run_cmd(cmd, display_cmd=None):
     show = display_cmd or ' '.join(cmd)
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=15
+            cmd, capture_output=True, text=True, timeout=15, stdin=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW
         )
         output = (result.stdout + result.stderr).strip()
         success = result.returncode == 0
@@ -1492,11 +1823,26 @@ def _run_cmd(cmd, display_cmd=None):
 #   - xterm.js receives proper ANSI escape sequences
 #
 
-async def interactive_shell_loop(server_url, device_id):
+async def interactive_shell_loop(server_url, device_id, shell_pref="cmd"):
     ws_url = server_url.replace("http://", "ws://").replace("https://", "wss://") + f"/ws/agent/{device_id}"
+    
+    global HAS_PYWINPTY
+    if not HAS_PYWINPTY:
+        log('WARN', "pywinpty not found at startup; remote shell will use basic pipes.")
+
     while True:
         pty_proc = None
+        is_pty = False
         try:
+            system_root = os.environ.get('SystemRoot', 'C:\\Windows')
+            ps_path = os.path.join(system_root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+            cmd_path = os.path.join(system_root, 'System32', 'cmd.exe')
+
+            if shell_pref == "powershell" and powershell_available():
+                shell_argv = [ps_path, "-NoLogo", "-NoProfile"]
+            else:
+                shell_argv = [cmd_path]
+
             connect_kwargs = {"origin": server_url}
             if ws_url.startswith("wss://") and _ssl_context:
                 connect_kwargs["ssl"] = _ssl_context
@@ -1504,45 +1850,75 @@ async def interactive_shell_loop(server_url, device_id):
                 connect_kwargs["extra_headers"] = {"Authorization": f"Bearer {AGENT_AUTH_TOKEN}"}
 
             async with websockets.connect(ws_url, **connect_kwargs) as ws:  # type: ignore
-                log('INFO', "Connected to Interactive Shell Relay — starting PTY")
-
-                from winpty import PtyProcess  # type: ignore
                 loop = asyncio.get_event_loop()
                 stop_event = threading.Event()
+                clean_env = os.environ.copy()
+                for k in ['PYTHONPATH', 'PYTHONHOME']:
+                    clean_env.pop(k, None)
 
-                # Spawn PowerShell inside a real ConPTY — start with generous size;
-                # the portal will send a resize signal once xterm.js is laid out.
-                pty_proc = PtyProcess.spawn(
-                    'powershell.exe -NoLogo -NoProfile',
-                    dimensions=(50, 220),
-                    cwd=os.path.expanduser('~')
-                )
+                # --- Spawn Method: WinPTY (Priority) ---
+                if HAS_PYWINPTY:
+                    try:
+                        # WinPTY is much more reliable in Session 0 than ConPTY
+                        pty_proc = PtyProcess.spawn(shell_argv, backend=Backend.WinPTY, cwd="C:\\", env=clean_env)
+                        is_pty = True
+                        log('INFO', f"Connected to Relay — Started WinPTY Shell (PID: {pty_proc.pid})")
+                    except Exception as e:
+                        log('WARN', f"WinPTY spawn failed: {e}. Falling back to Subprocess.")
+                        HAS_PYWINPTY = False # Disable for this session
 
-                # Send a space and a backspace to force the prompt to render
-                # immediately without triggering a newline/command execution
-                pty_proc.write(' \x08')
+                # --- Spawn Method: Subprocess (Fallback) ---
+                if pty_proc is None:
+                    pty_proc = subprocess.Popen(
+                        shell_argv,
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        env=clean_env,
+                        cwd="C:\\",
+                        bufsize=0, # Truly unbuffered
+                        creationflags=CREATE_NO_WINDOW
+                    )
+                    is_pty = False
+                    log('INFO', f"Connected to Relay — Started UNBUFFERED Subprocess Shell (PID: {pty_proc.pid})")
 
                 output_queue: asyncio.Queue = asyncio.Queue()
 
-                # --- Background thread: read PTY output → asyncio queue ---
+                # --- Background thread: read process output → asyncio queue ---
                 def _pty_reader():
+                    nonlocal is_pty
+                    log("DEBUG", f"Shell reader thread started for {'PTY' if is_pty else 'Subprocess'} PID {pty_proc.pid}")
                     while not stop_event.is_set():
                         try:
-                            if not pty_proc.isalive():  # type: ignore[attr-defined]
-                                break
-                            data = pty_proc.read(4096)  # type: ignore[attr-defined]
-                            if data:
-                                asyncio.run_coroutine_threadsafe(
-                                    output_queue.put(data), loop
-                                )
-                        except Exception:
+                            # Check if process is still alive
+                            if is_pty:
+                                if not pty_proc.isalive():
+                                    break
+                                data_str = pty_proc.read(4096)
+                                if not data_str:
+                                    break
+                                data = data_str.encode('utf-8', errors='replace')
+                            else:
+                                if pty_proc.poll() is not None:
+                                    break
+                                # Raw OS read for pipes to avoid buffering
+                                data = os.read(pty_proc.stdout.fileno(), 4096)
+                                if not data:
+                                    break
+                            
+                            char = data.decode('utf-8', errors='replace')
+                            log("DEBUG", f"Shell reader received {len(data)} bytes")
+                            asyncio.run_coroutine_threadsafe(output_queue.put(char), loop)
+                        except Exception as e:
+                            log("DEBUG", f"Shell reader exception: {repr(e)}")
                             break
                     asyncio.run_coroutine_threadsafe(output_queue.put(None), loop)
+                    log("DEBUG", "Shell reader thread exiting.")
 
                 reader_thread = threading.Thread(target=_pty_reader, daemon=True)
                 reader_thread.start()
 
-                # --- Coroutine: forward PTY output → WebSocket ---
+                # --- Coroutine: forward output → WebSocket ---
                 async def _forward_output():
                     while True:
                         data = await output_queue.get()
@@ -1550,32 +1926,36 @@ async def interactive_shell_loop(server_url, device_id):
                             break
                         try:
                             await ws.send(data)
-                        except Exception:
+                        except Exception as e:
+                            log("DEBUG", f"WebSocket send failed: {repr(e)}")
                             break
 
-                # --- Coroutine: forward WebSocket input → PTY stdin ---
-                # Special signal: ESC P T Y R : rows : cols  → resize the PTY
+                # --- Coroutine: forward WebSocket input → stdin ---
                 RESIZE_PREFIX = '\x1bPTYR:'
-
                 async def _forward_input():
+                    nonlocal is_pty
                     try:
                         while True:
                             msg = await ws.recv()
+                            # log("DEBUG", f"WS Input: {repr(msg)}")
                             if isinstance(msg, str) and msg.startswith(RESIZE_PREFIX):
-                                # Parse \x1bPTYR:{rows}:{cols} and resize PTY
-                                try:
-                                    parts = str(msg).replace(RESIZE_PREFIX, '', 1).split(':')
-                                    rows, cols = int(parts[0]), int(parts[1])
-                                    rows = max(1, min(rows, 200))
-                                    cols = max(10, min(cols, 500))
-                                    await loop.run_in_executor(
-                                        None, pty_proc.setwinsize, rows, cols  # type: ignore[attr-defined]
-                                    )
-                                    log('INFO', f"PTY resized to {rows}×{cols}")
-                                except Exception:
-                                    pass
+                                if is_pty:
+                                    # Parse ESC [ PTYR : rows ; cols
+                                    try:
+                                        parts = msg[len(RESIZE_PREFIX):].split(';')
+                                        if len(parts) == 2:
+                                            pty_proc.set_winsize(int(parts[0]), int(parts[1]))
+                                    except: pass
                             else:
-                                await loop.run_in_executor(None, pty_proc.write, msg)  # type: ignore[attr-defined]
+                                if isinstance(msg, str):
+                                    msg = msg.encode('utf-8')
+                                
+                                if is_pty:
+                                    # PtyProcess handles its own buffering
+                                    pty_proc.write(msg.decode('utf-8', errors='replace'))
+                                else:
+                                    await loop.run_in_executor(None, pty_proc.stdin.write, msg)
+                                    await loop.run_in_executor(None, pty_proc.stdin.flush)
                     except Exception:
                         pass
                     finally:
@@ -1589,17 +1969,18 @@ async def interactive_shell_loop(server_url, device_id):
         finally:
             if pty_proc is not None:
                 try:
-                    pty_proc.terminate()
+                    if is_pty: pty_proc.terminate()
+                    else: pty_proc.terminate()
                 except Exception:
                     pass
         await asyncio.sleep(5)
 
-def start_interactive_shell_thread(server_url, device_id):
+def start_interactive_shell_thread(server_url, device_id, shell_pref="cmd"):
     def run():
         # new event loop for the thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        loop.run_until_complete(interactive_shell_loop(server_url, device_id))
+        loop.run_until_complete(interactive_shell_loop(server_url, device_id, shell_pref))
     t = threading.Thread(target=run, daemon=True)
     t.start()
 
@@ -1607,6 +1988,7 @@ def start_interactive_shell_thread(server_url, device_id):
 # ── Main Loop ───────────────────────────────────────────────────────────────
 
 def main():
+    log('INFO', f"Agent starting... (HAS_PYWINPTY={HAS_PYWINPTY})")
     parser = argparse.ArgumentParser(description='Admin Control System Agent')
     parser.add_argument('--server', default='https://localhost:8000',
                         help='Central server URL (default: https://localhost:8000)')
@@ -1627,7 +2009,38 @@ def main():
     parser.add_argument('--watchdog', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--parent-pid', type=int, help=argparse.SUPPRESS)
     parser.add_argument('--cert-sha256', help='Optional TLS certificate pin (SHA256 fingerprint)')
+    parser.add_argument('--no-shell', action='store_true',
+                        help='Disable remote interactive shell')
+    parser.add_argument('--shell', choices=['powershell', 'cmd'], default='cmd',
+                        help='Which shell to expose for remote interactive access (default: cmd)')
+    parser.add_argument('--verify-otp', action='store_true',
+                        help='Standalone OTP validation via GUI prompt (exits 0=success, 1=fail)')
     args = parser.parse_args()
+
+    # If running uninstall without elevation, re-launch with UAC so service/cleanup succeeds.
+    if args.uninstall and not is_admin():
+        try:
+            # ShellExecuteW passes params as a single string; avoid wrapping values
+            # in inner double-quotes as they become literal characters in argv.
+            extra_args = [f'--server={args.server}', '--uninstall']
+            if args.no_verify_ssl:
+                extra_args.append('--no-verify-ssl')
+            if args.otp:
+                extra_args.append(f'--otp={args.otp}')
+            if args.service_name != SERVICE_NAME:
+                extra_args.append(f'--service-name={args.service_name}')
+            if args.install_dir:
+                extra_args.append(f'--install-dir={args.install_dir}')
+            if args.token:
+                extra_args.append(f'--token={args.token}')
+            params = " ".join(extra_args)
+            log('INFO', f"Re-launching with elevation: {sys.executable} {params}")
+            if WINDLL:
+                WINDLL.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+                return
+        except Exception as e:
+            log('WARN', f"Could not self-elevate for uninstall: {e}")
+        # Continue without elevation (will likely fail), but we log above.
 
     # Configure SSL context globally
     global _ssl_context, AGENT_AUTH_TOKEN, PINNED_CERT_SHA256
@@ -1641,6 +2054,13 @@ def main():
     pin_env = os.environ.get("PINNED_CERT_SHA256")
     PINNED_CERT_SHA256 = (args.cert_sha256 or pin_env or "").lower() or None
 
+    install_root = resolve_install_root(args.install_dir)
+    state = load_state()
+
+    # Fallback to state if server is untouched from default (e.g., during uninstaller call)
+    if args.server == 'https://localhost:8000' and state.get("server"):
+        args.server = state.get("server")
+
     server = args.server.rstrip('/')
 
     # Watchdog mode (spawned by main agent)
@@ -1649,7 +2069,6 @@ def main():
         return
 
     dry_run = args.dry_run
-    install_root = resolve_install_root(args.install_dir)
     try:
         ensure_dir(install_root)
     except Exception as e:
@@ -1660,6 +2079,10 @@ def main():
 
     if args.uninstall:
         success = protected_uninstall_flow(server, args.otp, args.service_name, install_root)
+        sys.exit(0 if success else 1)
+
+    if args.verify_otp:
+        success = protected_uninstall_flow(server, None, args.service_name, install_root, verify_only=True)
         sys.exit(0 if success else 1)
 
     hostname = get_hostname()
@@ -1722,10 +2145,10 @@ def main():
         tg_thread.start()
 
     # ── Start Interactive Shell Background Connection ───────────────────
-    if not dry_run:
-        start_interactive_shell_thread(server, device_id)
+    if not dry_run and not args.no_shell:
+        start_interactive_shell_thread(server, device_id, args.shell)
     else:
-        log('DRY-RUN', "Skipping interactive shell connection in dry-run mode.")
+        log('INFO', "Interactive shell disabled (dry-run or --no-shell).")
 
     # ── Start Event Log Collector Background Thread ───────────────────
     if not dry_run:
@@ -1772,24 +2195,28 @@ def main():
         log('DRY-RUN', "Skipping software inventory sync in dry-run mode.")
 
     # ── Start Activity Tracking Background Thread ─────────────────────────
-    if not dry_run:
+    if not dry_run and session_id.value != 0:
         act_thread = threading.Thread(
             target=activity_sampler_thread,
             args=(server, device_id),
             daemon=True
         )
         act_thread.start()
+    elif not dry_run:
+        log('DEBUG', "Skipping activity tracking in non-interactive session.")
     else:
         log('DRY-RUN', "Skipping activity tracking in dry-run mode.")
 
     # ── Start Patch Management Thread ───────────────────────────────────
-    if not dry_run:
+    if not dry_run and session_id.value == 0:
         upd_thread = threading.Thread(
             target=update_poll_loop,
             args=(server, device_id, args.service_name, install_root),
             daemon=True
         )
         upd_thread.start()
+    elif not dry_run:
+        log('DEBUG', f"Patch management disabled in user session (Session ID {session_id.value}).")
 
     # ── Polling loop ────────────────────────────────────────────────────
     log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
@@ -1986,6 +2413,21 @@ def run_with_tray(server, device_id):
         if hasattr(os, "startfile"):
             os.startfile(log_path)  # type: ignore[attr-defined]
 
+    def flush_queued_notifications():
+        """Display notifications queued by the service (session 0) instance."""
+        while True:
+            try:
+                msg = dequeue_notification()
+                if msg:
+                    # Force re-check PowerShell availability before displaying
+                    global _POWERSHELL_LAST_CHECK
+                    _POWERSHELL_LAST_CHECK = 0.0
+                    execute_modern_notify(msg)
+                    continue
+            except Exception as e:
+                log('WARN', f"Tray notify watcher error: {e}")
+            time.sleep(5)
+
     icon_image = _create_tray_image()
     menu = pystray.Menu(
         pystray.MenuItem("🖥️ Open Console", open_console, default=True),
@@ -1993,6 +2435,7 @@ def run_with_tray(server, device_id):
     )
     tray = pystray.Icon("ACS Agent", icon_image, "ACS Agent", menu)
     log('INFO', "🖥️  System tray icon active. Right-click the tray for status and logs.")
+    threading.Thread(target=flush_queued_notifications, daemon=True).start()
     tray.run()
 
 

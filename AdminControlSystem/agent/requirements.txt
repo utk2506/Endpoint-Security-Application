@@ -2,3 +2,5 @@ websockets
 pystray
 Pillow
 psutil
+pywinpty
+pynput
