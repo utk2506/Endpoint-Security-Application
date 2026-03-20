@@ -1,0 +1,11 @@
+*.db
+database.db
+*.db-journal
+agent/*.log
+agent/event_state.json
+__pycache__/
+*.pyc
+test_render.js
+*.log
+event_state.json
+agent_debug.log

@@ -125,6 +125,10 @@ python agent.py --server http://SERVER_IP:8000 --dry-run
 ### 3. Open the Portal
 Navigate to `http://SERVER_IP:8000` in a web browser.
 
+## Feature Tracking & Changelog
+
+To view the timeline of all implemented features, completed bugs, and project progress with timestamps, please refer to the [Changelog & Feature Tracking Document](./changelog.md).
+
 ## Security Notes (Phase 5)
 
 The current prototype has no authentication. Future phases will add:

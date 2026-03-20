@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login | Admin Control System</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/portal/login.css">
+</head>
+<body>
+    <div class="login-container">
+        <div class="login-glass">
+            <div class="login-header">
+                <div class="logo-box">
+                    <img src="/portal/chimera_logo.png" alt="Chimera Logo">
+                </div>
+                <h1>System Access</h1>
+                <p>Enterprise IT Authentication Portal</p>
+            </div>
+            
+            <form id="loginForm" class="login-form">
+                <div class="input-group">
+                    <label for="username">Username</label>
+                    <div class="input-wrapper">
+                        <span class="icon">👤</span>
+                        <input type="text" id="username" placeholder="Enter your username" required autocomplete="username">
+                    </div>
+                </div>
+                
+                <div class="input-group">
+                    <label for="password">Password</label>
+                    <div class="input-wrapper">
+                        <span class="icon">🔒</span>
+                        <input type="password" id="password" placeholder="••••••••" required autocomplete="current-password">
+                    </div>
+                </div>
+                
+                <div id="errorMessage" class="error-banner">
+                    <span class="err-icon">⚠️</span>
+                    <span class="err-text">Invalid credentials. Please try again.</span>
+                </div>
+                
+                <button type="submit" id="loginBtn" class="btn-login">
+                    <span class="btn-text">Sign In</span>
+                    <div class="loader"></div>
+                </button>
+            </form>
+            
+            <div class="login-footer">
+                <p>&copy; 2026 Chimera Technologies. All rights reserved.</p>
+                <div class="footer-links">
+                    <a href="#">Support</a>
+                    <span class="sep"></span>
+                    <a href="#">Security Policy</a>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="/portal/login.js"></script>
+</body>
+</html>
