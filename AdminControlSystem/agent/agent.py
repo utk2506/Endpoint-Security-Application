@@ -16,23 +16,61 @@ import os
 import socket
 import ctypes
 from ctypes import wintypes
-
-def is_admin():
-    """Check if the agent is running with Administrator privileges."""
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin() != 0  # type: ignore
-    except:
-        return False
 import subprocess
 import sys
 import time
 import threading
 import asyncio
-import websockets  # type: ignore
+import hashlib
+import random
+import secrets
+import string
+import tempfile
+import shutil
+import ssl
+from pathlib import Path
 from datetime import datetime
 from urllib import request, error, parse
+import http.client
+from typing import Optional, Dict, List, cast
+
+import psutil  # type: ignore
+import websockets  # type: ignore
+
+# Windows-specific creation flags (fallback to 0 for static analyzers / non-Win envs)
+CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
+CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+WINDLL = getattr(ctypes, "windll", None)
+
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # pyre-ignore[16]
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")  # pyre-ignore[16]
+    except Exception:
+        pass
+
+
+def is_admin():
+    """Check if the agent is running with Administrator privileges."""
+    try:
+        if not WINDLL:
+            return False
+        return WINDLL.shell32.IsUserAnAdmin() != 0  # type: ignore
+    except:
+        return False
 
 # ── Configuration ───────────────────────────────────────────────────────────
+
+AGENT_VERSION = "1.1.5"
+SERVICE_NAME = "YourAgent"
+DEFAULT_INSTALL_DIR = r"C:\\Program Files\\YourAgent"
+STATE_FILE = "agent_state.json"
+UPDATE_STAGING_DIR = "updates"
+UPDATE_MIN_INTERVAL = 5  # seconds (reduced for testing)
+UPDATE_MAX_INTERVAL = 10  # seconds (reduced for testing)
+WATCHDOG_INTERVAL = 8      # seconds
 
 POLL_INTERVAL = 5  # seconds
 LOG_COLLECT_INTERVAL = 60  # seconds — how often to collect event logs
@@ -309,27 +347,384 @@ def log(level, message):
         pass
 
 
-# Global SSL context (set at startup based on --no-verify-ssl flag)
+# ── Path & state helpers ────────────────────────────────────────────────────
+
+def runtime_root() -> Path:
+    """Return the directory that contains the running binary or script."""
+    return Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+
+
+def state_file_path() -> Path:
+    return runtime_root() / STATE_FILE
+
+
+def load_state() -> dict:
+    try:
+        with open(state_file_path(), "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_state(data: dict):
+    try:
+        state_file_path().write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception as e:
+        log("WARN", f"Could not persist agent state: {e}")
+
+
+def update_state(**kwargs):
+    state = load_state()
+    state.update(kwargs)
+    save_state(state)
+
+
+def compute_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def ensure_dir(path: Path):
+    path.mkdir(parents=True, exist_ok=True)
+
+
+# Global SSL context and auth token (set at startup based on CLI flags)
 _ssl_context = None
+AGENT_AUTH_TOKEN = None
+PINNED_CERT_SHA256 = None
+LAST_SYNC_TS = None
 
 
-def api_call(base_url, method, path, body=None):
+def _check_cert_pin(response):
+    """Optional certificate pinning: compare SHA256 fingerprint of server cert."""
+    if not PINNED_CERT_SHA256:
+        return
+    try:
+        cert_bin = response.fp.raw._sock.getpeercert(binary_form=True)  # type: ignore[attr-defined]
+        fp = hashlib.sha256(cert_bin).hexdigest().lower()
+        if fp != PINNED_CERT_SHA256.lower():
+            raise ValueError(f"TLS pin mismatch: expected {PINNED_CERT_SHA256}, got {fp}")
+    except Exception as e:
+        log("ERROR", f"Certificate pinning failed: {e}")
+        raise
+
+
+def api_call(base_url, method, path, body=None, headers=None, timeout=15):
     """Simple HTTP helper using only urllib (no external deps)."""
     url = f"{base_url}{path}"
     data = json.dumps(body).encode('utf-8') if body else None
     req = request.Request(url, data=data, method=method)
     req.add_header('Content-Type', 'application/json')
+    req.add_header('X-Agent-Version', AGENT_VERSION)
+    if AGENT_AUTH_TOKEN:
+        req.add_header('Authorization', f"Bearer {AGENT_AUTH_TOKEN}")
+    if headers:
+        for k, v in headers.items():
+            req.add_header(k, v)
 
     try:
-        with request.urlopen(req, timeout=10, context=_ssl_context) as res:
+        with request.urlopen(req, timeout=timeout, context=_ssl_context) as res:
+            _check_cert_pin(res)
             return json.loads(res.read().decode('utf-8'))
     except error.HTTPError as e:
         detail = e.read().decode('utf-8', errors='replace')
         log('ERROR', f"API {method} {path} → {e.code}: {detail}")
         return None
-    except error.URLError as e:
-        log('ERROR', f"Cannot reach server: {e.reason}")
+    except http.client.RemoteDisconnected as e:
+        log('ERROR', f"Remote end closed connection without response. (Hint: check if you are connecting via HTTP to an HTTPS port or vice-versa.) Details: {e}")
         return None
+    except error.URLError as e:
+        if "certificate verify failed" in str(e).lower():
+            log('ERROR', f"SSL certificate verification failed: {e}. (Hint: Use --no-verify-ssl if the server is using a self-signed certificate.)")
+        else:
+            log('ERROR', f"Cannot reach server: {e.reason}")
+        return None
+
+
+def current_binary_path() -> Path:
+    return Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve()
+
+
+def resolve_install_root(cli_install_dir: str | None = None) -> Path:
+    """Decide where the agent considers its home/install directory."""
+    if cli_install_dir:
+        return Path(cli_install_dir)
+    env_dir = os.environ.get("ACS_INSTALL_DIR")
+    if env_dir:
+        return Path(env_dir)
+    runtime = runtime_root()
+    if "Program Files" in str(runtime):
+        return runtime
+    return Path(DEFAULT_INSTALL_DIR)
+
+
+def staging_dir_path(install_root: Path) -> Path:
+    path = install_root / UPDATE_STAGING_DIR
+    ensure_dir(path)
+    return path
+
+
+def is_service_running(name: str) -> bool:
+    try:
+        out = subprocess.check_output(["sc", "query", name], creationflags=CREATE_NO_WINDOW)
+        return b"RUNNING" in out
+    except Exception:
+        return False
+
+
+def stop_service(name: str):
+    cmds = [
+        ["nssm", "stop", name],
+        ["sc", "stop", name],
+    ]
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
+        except Exception:
+            continue
+
+
+def restart_service(name: str):
+    cmds = [
+        ["nssm", "restart", name],
+        ["sc", "start", name],
+    ]
+    for cmd in cmds:
+        try:
+            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=CREATE_NO_WINDOW)
+            if is_service_running(name):
+                return
+        except Exception:
+            continue
+
+
+def download_binary(url: str, dest_path: Path):
+    """Download binary content to path with optional auth + pinning and progress logging."""
+    req = request.Request(url)
+    if AGENT_AUTH_TOKEN:
+        req.add_header("Authorization", f"Bearer {AGENT_AUTH_TOKEN}")
+    req.add_header("X-Agent-Version", AGENT_VERSION)
+    with request.urlopen(req, timeout=60, context=_ssl_context) as res:
+        _check_cert_pin(res)
+
+        # Stream the download to report progress
+        total_size = int(res.getheader('Content-Length', 0))
+        ensure_dir(dest_path.parent)
+
+        CHUNK_SIZE = 1048576  # 1 MB
+        downloaded: int = 0
+        last_reported_pct: int = 0
+
+        with open(dest_path, 'wb') as f:
+            while True:
+                chunk = res.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                
+                if total_size > 0:
+                    pct = int((downloaded / total_size) * 100)
+                    # Report every 20%
+                    if pct - last_reported_pct >= 20 or pct == 100:
+                        log("INFO", f"⬇ Downloading update: {pct}% ({downloaded // 1048576} MB / {total_size // 1048576} MB)")
+                        last_reported_pct = pct
+
+    return dest_path
+
+
+def schedule_binary_swap(staged_path: Path, service_name: str):
+    """Swap the current binary with the staged one via a detached PowerShell helper."""
+    target = current_binary_path()
+    backup = target.with_name(f"{target.stem}_backup{target.suffix}")
+    helper = staged_path.with_suffix(".ps1")
+    script = rf"""
+$ErrorActionPreference = 'SilentlyContinue'
+$source = '{staged_path}'
+$target = '{target}'
+$backup = '{backup}'
+$service = '{service_name}'
+$procName = [System.IO.Path]::GetFileNameWithoutExtension($target)
+
+# Stop service + any stray agent/watchdog processes to release the file lock
+Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
+Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# Retry the copy a few times in case the file handle lingers
+$copied = $false
+for ($i = 0; $i -lt 10; $i++) {{
+    try {{
+        Start-Sleep -Seconds 1
+        Copy-Item $target $backup -Force
+        Copy-Item $source $target -Force
+        $copied = $true
+        break
+    }} catch {{
+        Start-Sleep -Seconds 1
+    }}
+}}
+
+if ($copied) {{
+    if (Get-Service -Name $service -ErrorAction SilentlyContinue) {{
+        Start-Service -Name $service -ErrorAction SilentlyContinue
+    }} else {{
+        Start-Process -FilePath $target
+    }}
+}}
+
+Remove-Item $source -Force -ErrorAction SilentlyContinue
+Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
+"""
+    helper.write_text(script, encoding="utf-8")
+    flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+    subprocess.Popen(
+        ["powershell", "-ExecutionPolicy", "Bypass", "-File", str(helper)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=flags,
+    )
+    log("INFO", "Update helper launched; exiting for binary swap…")
+    os._exit(0)
+
+
+def update_poll_loop(server_url: str, device_id: str, service_name: str, install_root: Path):
+    """Background loop that checks for newer agent versions and applies them safely."""
+    staging = staging_dir_path(install_root)
+    while True:
+        wait_s = random.randint(UPDATE_MIN_INTERVAL, UPDATE_MAX_INTERVAL)
+        time.sleep(wait_s)
+        try:
+            resp = api_call(server_url, "GET", f"/agent/version?device_id={device_id}&current_version={AGENT_VERSION}")
+            if not resp or not isinstance(resp, dict) or not resp.get("update_available"):
+                continue
+            download_url = resp.get("download_url")
+            checksum = resp.get("checksum_sha256")
+            new_version = resp.get("version")
+            if not download_url or not new_version:
+                continue
+
+            file_name = download_url.split("/")[-1].split("?")[0] or f"agent-{new_version}.exe"
+            staged_path = staging / file_name
+            log("INFO", f"⬇ Downloading agent update {new_version}…")
+            download_binary(download_url, staged_path)
+            if checksum:
+                actual = compute_sha256(staged_path)
+                if actual.lower() != checksum.lower():
+                    log("ERROR", f"Checksum mismatch for update: expected {checksum}, got {actual}")
+                    staged_path.unlink(missing_ok=True)
+                    continue
+            log("INFO", f"Update {new_version} ready; scheduling binary swap.")
+            schedule_binary_swap(staged_path, service_name)
+        except Exception as e:
+            log("WARN", f"Version check/apply failed: {e}")
+
+
+def start_watchdog_process(server_url: str, service_name: str):
+    """Spawn a lightweight watchdog to restart the agent if killed."""
+    try:
+        exe = current_binary_path()
+            flags = DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP
+            cmd = [
+                str(exe),
+                "--watchdog",
+                f"--parent-pid={os.getpid()}",
+                f"--server={server_url}",
+            f"--service-name={service_name}",
+        ]
+        if AGENT_AUTH_TOKEN:
+            cmd.append(f"--token={AGENT_AUTH_TOKEN}")
+        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
+        log("INFO", "Watchdog process spawned.")
+    except Exception as e:
+        log("WARN", f"Failed to start watchdog: {e}")
+
+
+def watchdog_loop(parent_pid: int, service_name: str, server_url: str):
+    """Runs in watchdog mode."""
+    log("INFO", f"Watchdog guarding PID {parent_pid}")
+    while True:
+        if parent_pid and not psutil.pid_exists(parent_pid):
+            log("WARN", "Primary agent stopped — attempting restart.")
+            restart_service(service_name)
+            if not is_service_running(service_name):
+                try:
+                    exe = current_binary_path()
+                    cmd = [str(exe), "--server", server_url]
+                    if AGENT_AUTH_TOKEN:
+                        cmd.append(f"--token={AGENT_AUTH_TOKEN}")
+                    subprocess.Popen(cmd, creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                except Exception:
+                    pass
+            parent_pid = 0  # prevent tight loop
+        time.sleep(WATCHDOG_INTERVAL)
+
+
+def tamper_guard_loop(service_name: str):
+    """Lightweight guard to restart service or restore binary if tampered."""
+    binary = current_binary_path()
+    backup = binary.with_name(f"{binary.stem}_backup{binary.suffix}")
+    while True:
+        time.sleep(max(WATCHDOG_INTERVAL, 10))
+        try:
+            if service_name and not is_service_running(service_name):
+                restart_service(service_name)
+            if not binary.exists() and backup.exists():
+                shutil.copy2(backup, binary)
+                log("WARN", "Agent binary restored from backup after deletion attempt.")
+        except Exception:
+            pass
+
+
+def protected_uninstall_flow(server_url: str, otp: str | None, service_name: str, install_root: Path):
+    """Verify OTP with backend and uninstall service + files."""
+    state = load_state()
+    device_id = state.get("device_id")
+
+    if not device_id:
+        # Best-effort re-registration to retrieve device id
+        resp = api_call(server_url, "POST", "/register", {
+            "hostname": get_hostname(),
+            "ip_address": get_ip(),
+            "agent_version": AGENT_VERSION,
+            "install_path": str(install_root),
+        })
+        if resp and resp.get("device_id"):
+            device_id = resp["device_id"]
+            update_state(device_id=device_id)
+
+    if not device_id:
+        log("ERROR", "Cannot determine device ID; uninstall aborted.")
+        return False
+
+    code = otp or input("Enter uninstall OTP from admin portal: ").strip()
+    if not code:
+        log("ERROR", "OTP is required for uninstall.")
+        return False
+
+    resp = api_call(server_url, "POST", "/verify-uninstall", {
+        "device_id": device_id,
+        "otp": code,
+        "hostname": get_hostname(),
+    })
+    if not resp or resp.get("status") != "ok":
+        log("ERROR", "Uninstall blocked: invalid or expired OTP.")
+        return False
+
+    log("INFO", "OTP validated. Stopping service and removing files…")
+    stop_service(service_name)
+    try:
+        safe_root = str(install_root).lower()
+        if "youragent" in safe_root:
+            shutil.rmtree(install_root, ignore_errors=True)
+        else:
+            log("WARN", f"Install path '{install_root}' does not look safe to delete; skipped.")
+    except Exception as e:
+        log("WARN", f"Cleanup warning: {e}")
+    log("INFO", "Agent uninstalled successfully.")
+    return True
 
 
 def get_hostname():
@@ -625,17 +1020,19 @@ def push_software_inventory(server, device_id):
 PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 def _get_process_name(pid: int) -> str:
+    if not WINDLL:
+        return ""
     try:
-        h_proc = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        h_proc = WINDLL.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not h_proc:
             return ""
         try:
             buf = ctypes.create_unicode_buffer(260)
             size = wintypes.DWORD(len(buf))
-            if ctypes.windll.kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
+            if WINDLL.kernel32.QueryFullProcessImageNameW(h_proc, 0, buf, ctypes.byref(size)):
                 return os.path.basename(buf.value)
         finally:
-            ctypes.windll.kernel32.CloseHandle(h_proc)
+            WINDLL.kernel32.CloseHandle(h_proc)
     except Exception:
         return ""
     return ""
@@ -643,19 +1040,21 @@ def _get_process_name(pid: int) -> str:
 
 def _get_foreground_window_info():
     """Return (title, process_name) for the current foreground window."""
+    if not WINDLL:
+        return None, None
     try:
-        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        hwnd = WINDLL.user32.GetForegroundWindow()
         if not hwnd:
             return None, None
 
         # Title
         buf = ctypes.create_unicode_buffer(512)
-        ctypes.windll.user32.GetWindowTextW(hwnd, buf, 512)
+        WINDLL.user32.GetWindowTextW(hwnd, buf, 512)
         title = buf.value.strip()
 
         # PID -> process name
         pid = wintypes.DWORD()
-        ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        WINDLL.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
         proc_name = _get_process_name(pid.value)
 
         return title or None, proc_name or None
@@ -665,13 +1064,15 @@ def _get_foreground_window_info():
 
 
 def _get_idle_seconds():
+    if not WINDLL:
+        return 0
     try:
         class LASTINPUTINFO(ctypes.Structure):
             _fields_ = [('cbSize', wintypes.UINT), ('dwTime', wintypes.DWORD)]
         lii = LASTINPUTINFO()
         lii.cbSize = ctypes.sizeof(LASTINPUTINFO)
-        if ctypes.windll.user32.GetLastInputInfo(ctypes.byref(lii)):
-            millis = ctypes.windll.kernel32.GetTickCount() - lii.dwTime
+        if WINDLL.user32.GetLastInputInfo(ctypes.byref(lii)):
+            millis = WINDLL.kernel32.GetTickCount() - lii.dwTime
             return int(millis / 1000)
     except Exception:
         pass
@@ -916,7 +1317,7 @@ def execute_modern_notify(message):
     session_id = 0
     try:
         current_session = ctypes.c_uint32()
-        if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(current_session)):
+        if WINDLL and WINDLL.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(current_session)):
             session_id = current_session.value
     except:
         pass
@@ -1099,6 +1500,8 @@ async def interactive_shell_loop(server_url, device_id):
             connect_kwargs = {"origin": server_url}
             if ws_url.startswith("wss://") and _ssl_context:
                 connect_kwargs["ssl"] = _ssl_context
+            if AGENT_AUTH_TOKEN:
+                connect_kwargs["extra_headers"] = {"Authorization": f"Bearer {AGENT_AUTH_TOKEN}"}
 
             async with websockets.connect(ws_url, **connect_kwargs) as ws:  # type: ignore
                 log('INFO', "Connected to Interactive Shell Relay — starting PTY")
@@ -1205,30 +1608,63 @@ def start_interactive_shell_thread(server_url, device_id):
 
 def main():
     parser = argparse.ArgumentParser(description='Admin Control System Agent')
-    parser.add_argument('--server', default='http://localhost:8000',
-                        help='Central server URL (default: http://localhost:8000)')
+    parser.add_argument('--server', default='https://localhost:8000',
+                        help='Central server URL (default: https://localhost:8000)')
     parser.add_argument('--dry-run', action='store_true',
                         help='Print commands instead of executing them')
     parser.add_argument('--no-verify-ssl', action='store_true',
                         help='Disable SSL certificate verification (for self-signed certs)')
     parser.add_argument('--tray', action='store_true',
                         help='Show a system tray icon (requires pystray + Pillow)')
+    parser.add_argument('--token', default=os.environ.get("AGENT_TOKEN") or os.environ.get("ACS_AGENT_TOKEN"),
+                        help='Bearer token used for agent authentication')
+    parser.add_argument('--service-name', default=SERVICE_NAME,
+                        help='Windows Service name (NSSM) to guard/restart')
+    parser.add_argument('--install-dir', help='Override install directory (default Program Files/YourAgent)')
+    parser.add_argument('--uninstall', action='store_true',
+                        help='Run protected uninstall flow (requires OTP) and exit')
+    parser.add_argument('--otp', help='OTP for protected uninstall flow')
+    parser.add_argument('--watchdog', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--parent-pid', type=int, help=argparse.SUPPRESS)
+    parser.add_argument('--cert-sha256', help='Optional TLS certificate pin (SHA256 fingerprint)')
     args = parser.parse_args()
 
     # Configure SSL context globally
-    global _ssl_context
-    if args.no_verify_ssl or args.server.startswith('https://'):
-        import ssl
-        _ssl_context = ssl.create_default_context()
-        if args.no_verify_ssl:
-            _ssl_context.check_hostname = False
-            _ssl_context.verify_mode = ssl.CERT_NONE
-            log('WARN', 'SSL certificate verification is DISABLED (self-signed cert mode).')
+    global _ssl_context, AGENT_AUTH_TOKEN, PINNED_CERT_SHA256
+    _ssl_context = ssl.create_default_context()
+    if args.no_verify_ssl:
+        _ssl_context.check_hostname = False
+        _ssl_context.verify_mode = ssl.CERT_NONE
+        log('WARN', 'SSL certificate verification is DISABLED (self-signed cert mode).')
+
+    AGENT_AUTH_TOKEN = args.token
+    pin_env = os.environ.get("PINNED_CERT_SHA256")
+    PINNED_CERT_SHA256 = (args.cert_sha256 or pin_env or "").lower() or None
 
     server = args.server.rstrip('/')
+
+    # Watchdog mode (spawned by main agent)
+    if args.watchdog:
+        watchdog_loop(args.parent_pid or 0, args.service_name, server)
+        return
+
     dry_run = args.dry_run
+    install_root = resolve_install_root(args.install_dir)
+    try:
+        ensure_dir(install_root)
+    except Exception as e:
+        log('WARN', f"Could not create install dir {install_root}: {e}. Falling back to runtime directory.")
+        install_root = runtime_root()
+        ensure_dir(install_root)
+    staging_dir_path(install_root)
+
+    if args.uninstall:
+        success = protected_uninstall_flow(server, args.otp, args.service_name, install_root)
+        sys.exit(0 if success else 1)
+
     hostname = get_hostname()
     ip_address = get_ip()
+    update_state(server=server, install_path=str(install_root), hostname=hostname)
 
     print()
     print('╔══════════════════════════════════════════════════╗')
@@ -1243,7 +1679,7 @@ def main():
     try:
         import ctypes
         session_id = ctypes.c_uint32()
-        if ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
+        if WINDLL and WINDLL.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
              log('INFO', f"Agent Session ID: {session_id.value}")
     except:
         pass
@@ -1256,21 +1692,34 @@ def main():
     all_users = collect_all_users()
     
     log('INFO', 'Registering device with server…')
-    device_id = None
+    state = load_state()
+    device_id = state.get("device_id")
+    if device_id:
+        log('INFO', f"Cached device id {device_id}; refreshing registration.")
 
-    while device_id is None:
+    while True:
         resp = api_call(server, 'POST', '/register', {
             'hostname': hostname,
             'ip_address': ip_address,
             'system_info': system_info,
             'all_users': all_users,
+            'agent_version': AGENT_VERSION,
+            'install_path': str(install_root),
         })
         if resp and 'device_id' in resp:
             device_id = resp['device_id']
+            update_state(device_id=device_id, agent_version=AGENT_VERSION, last_seen=datetime.utcnow().isoformat() + "Z")
             log('INFO', f"Registered as device #{device_id}")
+            break
         else:
             log('WARN', f"Registration failed, retrying in {POLL_INTERVAL}s…")
             time.sleep(POLL_INTERVAL)
+
+    # ── Start platform protections ──────────────────────────────────────
+    if not dry_run:
+        start_watchdog_process(server, args.service_name)
+        tg_thread = threading.Thread(target=tamper_guard_loop, args=(args.service_name,), daemon=True)
+        tg_thread.start()
 
     # ── Start Interactive Shell Background Connection ───────────────────
     if not dry_run:
@@ -1290,7 +1739,7 @@ def main():
         log('DRY-RUN', "Skipping event log collection in dry-run mode.")
 
     # ── Start System Info Refresh Background Thread ───────────────────
-    SYS_INFO_INTERVAL = 10  # refresh system info every 10 seconds for real-time monitoring
+    SYS_INFO_INTERVAL = 60  # refresh system info every 60 seconds to reduce overhead
 
     def sys_info_refresh_loop():
         while True:
@@ -1303,6 +1752,8 @@ def main():
                 'ip_address': get_ip(),
                 'system_info': fresh_info,
                 'all_users': fresh_users,
+                'agent_version': AGENT_VERSION,
+                'install_path': str(install_root),
             })
 
     if not dry_run:
@@ -1331,6 +1782,15 @@ def main():
     else:
         log('DRY-RUN', "Skipping activity tracking in dry-run mode.")
 
+    # ── Start Patch Management Thread ───────────────────────────────────
+    if not dry_run:
+        upd_thread = threading.Thread(
+            target=update_poll_loop,
+            args=(server, device_id, args.service_name, install_root),
+            daemon=True
+        )
+        upd_thread.start()
+
     # ── Polling loop ────────────────────────────────────────────────────
     log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
     log('INFO', f"Polling for commands every {POLL_INTERVAL}s…")
@@ -1347,8 +1807,11 @@ def main():
 
 def main_loop(server, device_id, dry_run=False):
     """The main polling loop — runs indefinitely."""
+    global LAST_SYNC_TS
+    last_state_write = time.time()
     while True:
         try:
+            LAST_SYNC_TS = datetime.utcnow()
             resp = api_call(server, 'GET', f'/get_command/{device_id}')
             if resp and resp.get('command'):
                 cmd = resp['command']
@@ -1407,6 +1870,13 @@ def main_loop(server, device_id, dry_run=False):
         except Exception as e:
             log('ERROR', f"Unexpected error: {e}")
 
+        if time.time() - last_state_write >= 60:
+            try:
+                update_state(last_seen=LAST_SYNC_TS.isoformat() + "Z")
+            except Exception:
+                pass
+            last_state_write = time.time()
+
         time.sleep(POLL_INTERVAL)
 
 
@@ -1453,27 +1923,76 @@ def run_with_tray(server, device_id):
 
     log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_debug.log')
 
-    def on_status(icon, item):
-        import ctypes
-        ctypes.windll.user32.MessageBoxW(0, f"Connected to:\n{server}\n\nDevice ID:\n{device_id}", "ACS Agent Status", 0)
+    def read_log_tail(lines=200):
+        try:
+            with open(log_path, 'r', encoding='utf-8', errors='ignore') as f:
+                return ''.join(f.readlines()[-lines:])
+        except Exception:
+            return "No log entries yet."
+
+    def open_console(icon=None, item=None):
+        """Lightweight status console window."""
+        def _show():
+            import tkinter as tk
+            from tkinter import scrolledtext
+
+            state = load_state()
+            win = tk.Tk()
+            win.title("YourAgent Console")
+            win.geometry("520x360")
+            win.resizable(False, False)
+
+            status_color = "#2ecc71"
+            status_text = "Online"
+            if not LAST_SYNC_TS or (datetime.utcnow() - LAST_SYNC_TS).total_seconds() > 45:
+                status_color = "#f1c40f"
+                status_text = "Idle"
+
+            header = tk.Frame(win, bg="#1a2535", height=50)
+            header.pack(fill="x")
+            tk.Label(header, text="YourAgent Endpoint", fg="white", bg="#1a2535",
+                     font=("Segoe UI", 12, "bold")).pack(side="left", padx=14, pady=10)
+            tk.Label(header, text=f"{status_text}", fg=status_color, bg="#1a2535",
+                     font=("Segoe UI", 11, "bold")).pack(side="right", padx=14)
+
+            body = tk.Frame(win, padx=12, pady=10)
+            body.pack(fill="both", expand=True)
+
+            tk.Label(body, text=f"Server: {server}", anchor="w").pack(fill="x")
+            tk.Label(body, text=f"Device ID: {device_id}", anchor="w").pack(fill="x")
+            tk.Label(body, text=f"Agent version: {AGENT_VERSION}", anchor="w").pack(fill="x")
+            tk.Label(body, text=f"Last sync: {LAST_SYNC_TS.isoformat() if LAST_SYNC_TS else '—'}", anchor="w").pack(fill="x")
+            tk.Label(body, text=f"Install path: {state.get('install_path', 'unknown')}", anchor="w").pack(fill="x")
+
+            tk.Label(body, text="Recent log:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(8, 2))
+            log_box = scrolledtext.ScrolledText(body, height=10, font=("Consolas", 9))
+            log_box.pack(fill="both", expand=True)
+            log_box.insert("end", read_log_tail(120))
+            log_box.configure(state="disabled")
+
+            def refresh():
+                log_box.configure(state="normal")
+                log_box.delete("1.0", "end")
+                log_box.insert("end", read_log_tail(120))
+                log_box.configure(state="disabled")
+                win.update_idletasks()
+
+            tk.Button(body, text="Refresh", command=refresh).pack(anchor="e", pady=6)
+            win.mainloop()
+
+        threading.Thread(target=_show, daemon=True).start()
 
     def on_open_log(icon, item):
-        os.startfile(log_path)
-
-    def on_exit(icon, item):
-        log('INFO', "Agent exiting via tray menu.")
-        icon.stop()
-        os._exit(0)
+        if hasattr(os, "startfile"):
+            os.startfile(log_path)  # type: ignore[attr-defined]
 
     icon_image = _create_tray_image()
     menu = pystray.Menu(
-        pystray.MenuItem("📋 Status", on_status),
+        pystray.MenuItem("🖥️ Open Console", open_console, default=True),
         pystray.MenuItem("📄 Open Log", on_open_log),
-        pystray.Menu.SEPARATOR,
-        pystray.MenuItem("❌ Exit", on_exit),
     )
     tray = pystray.Icon("ACS Agent", icon_image, "ACS Agent", menu)
-    log('INFO', "🖥️  System tray icon active. Right-click the tray for options.")
+    log('INFO', "🖥️  System tray icon active. Right-click the tray for status and logs.")
     tray.run()
 
 

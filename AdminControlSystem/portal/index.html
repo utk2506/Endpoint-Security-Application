@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,1010 +14,1302 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
     <link rel="stylesheet" href="/portal/styles.css">
 </head>
+
 <body>
 
-<!-- ═══════════════════ MODALS (always in DOM) ═══════════════════ -->
+    <!-- ═══════════════════ MODALS (always in DOM) ═══════════════════ -->
 
-<!-- Terminal Modal -->
-<div class="modal-overlay" id="terminalModal">
-    <div class="modal-box size-lg" style="display:flex;flex-direction:column;">
-        <div class="modal-header">
-            <span>⚡ Interactive Real-Time Terminal</span>
-            <button class="modal-close" onclick="closeTerminal()">×</button>
-        </div>
-        <div class="terminal-body" id="terminalContainer"></div>
-    </div>
-</div>
-
-<!-- Command Details Modal -->
-<div class="modal-overlay" id="cmdDetailsModal" onclick="if(event.target===this) closeCmdDetailsModal()">
-    <div class="modal-box size-md" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <span>🔍 Command Details</span>
-            <button class="modal-close" onclick="closeCmdDetailsModal()">×</button>
-        </div>
-        <div class="modal-body">
-            <div class="meta-grid">
-                <strong>Command ID:</strong> <span id="cmdModalId"></span>
-                <strong>Device:</strong>     <span id="cmdModalDevice"></span>
-                <strong>Action:</strong>     <span id="cmdModalAction" style="text-transform:capitalize;"></span>
-                <strong>Target User:</strong><span id="cmdModalTarget"></span>
-                <strong>Timestamp:</strong>  <span id="cmdModalTime"></span>
+    <!-- Terminal Modal -->
+    <div class="modal-overlay" id="terminalModal">
+        <div class="modal-box size-lg" style="display:flex;flex-direction:column;">
+            <div class="modal-header">
+                <span>⚡ Interactive Real-Time Terminal</span>
+                <button class="modal-close" onclick="closeTerminal()">×</button>
             </div>
-            <hr style="border:0;border-top:1px solid var(--border);margin-bottom:14px;">
-            <div style="margin-bottom:12px;">
-                <div style="font-size:11px;font-weight:700;color:var(--text-2);text-transform:uppercase;margin-bottom:6px;">Payload / Script</div>
-                <div id="cmdModalPayload" class="code-block"></div>
-            </div>
-            <div>
-                <div style="font-size:11px;font-weight:700;color:var(--text-2);text-transform:uppercase;margin-bottom:6px;">Result</div>
-                <div id="cmdModalResult" class="code-block"></div>
-            </div>
+            <div class="terminal-body" id="terminalContainer"></div>
         </div>
     </div>
-</div>
 
-<!-- Event Log Details Modal -->
-<div class="modal-overlay" id="logDetailsModal">
-    <div class="modal-box size-md" style="max-height:80vh;">
-        <div class="modal-header">
-            <span>📄 Event Log Details</span>
-            <button class="modal-close" onclick="closeLogDetailsModal()">×</button>
-        </div>
-        <div class="modal-body">
-            <div class="meta-grid">
-                <strong>Event ID:</strong>  <span id="logModalEventId" style="font-weight:700;"></span>
-                <strong>Log Source:</strong><span id="logModalSource"></span>
-                <strong>Timestamp:</strong> <span id="logModalTime"></span>
-                <strong>Device:</strong>    <span id="logModalDevice"></span>
-                <strong>User:</strong>      <span id="logModalUser"></span>
+    <!-- Command Details Modal -->
+    <div class="modal-overlay" id="cmdDetailsModal" onclick="if(event.target===this) closeCmdDetailsModal()">
+        <div class="modal-box size-md" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span>🔍 Command Details</span>
+                <button class="modal-close" onclick="closeCmdDetailsModal()">×</button>
             </div>
-            <hr style="border:0;border-top:1px solid var(--border);margin-bottom:14px;">
-            <div id="logModalMessage" class="code-block"></div>
-        </div>
-    </div>
-</div>
-
-<!-- System Info Modal -->
-<div class="modal-overlay" id="sysInfoModal" onclick="closeSysInfoModal(event)">
-    <div class="modal-box size-md" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <div class="modal-title-group">
-                <span>🖥️</span>
-                <span>System Information</span>
-                <span class="modal-sep">--</span>
-                <span id="sysInfoDeviceName" class="modal-hostname">—</span>
-                <span id="sysInfoStatusBadge"></span>
-            </div>
-            <button class="modal-close" onclick="closeSysInfoModal()">×</button>
-        </div>
-        <div class="modal-body" id="sysInfoBody">
-            <div class="empty-state"><span class="ei">⏳</span>Loading system information…</div>
-        </div>
-    </div>
-</div>
-
-<!-- Installed Software Modal -->
-<div class="modal-overlay" id="softwareModal" onclick="closeSoftwareModal(event)">
-    <div class="modal-box size-lg" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <div class="modal-title-group">
-                <span>📦</span>
-                <span>Installed Software</span>
-                <span class="modal-sep">--</span>
-                <span id="swDeviceName" class="modal-hostname">—</span>
-            </div>
-            <button class="modal-close" onclick="closeSoftwareModal()">×</button>
-        </div>
-        <div class="modal-body">
-            <div class="software-toolbar">
-                <div class="software-toolbar-left">
-                    <input id="softwareSearch" type="text" placeholder="Search name or publisher…" onkeydown="if(event.key==='Enter'){ loadSoftwareInventory(); }">
-                    <button class="btn btn-outline btn-sm" onclick="loadSoftwareInventory()">Refresh</button>
+            <div class="modal-body">
+                <div class="meta-grid">
+                    <strong>Command ID:</strong> <span id="cmdModalId"></span>
+                    <strong>Device:</strong> <span id="cmdModalDevice"></span>
+                    <strong>Action:</strong> <span id="cmdModalAction" style="text-transform:capitalize;"></span>
+                    <strong>Target User:</strong><span id="cmdModalTarget"></span>
+                    <strong>Timestamp:</strong> <span id="cmdModalTime"></span>
                 </div>
-                <div class="software-toolbar-right">
-                    <span id="swCount" class="muted-pill">0 items</span>
+                <hr style="border:0;border-top:1px solid var(--border);margin-bottom:14px;">
+                <div style="margin-bottom:12px;">
+                    <div
+                        style="font-size:11px;font-weight:700;color:var(--text-2);text-transform:uppercase;margin-bottom:6px;">
+                        Payload / Script</div>
+                    <div id="cmdModalPayload" class="code-block"></div>
                 </div>
-            </div>
-            <div id="softwareTable" class="software-table">
-                <div class="empty-state"><span class="ei">⏳</span>Loading installed software…</div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- BitLocker Key Display Modal -->
-<div class="modal-overlay" id="bitlockerKeyModal" onclick="if(event.target===this) closeBitLockerKeyModal()">
-    <div class="modal-box size-sm" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            <div class="modal-title-group">
-                <span>🔐</span>
-                <span>BitLocker Recovery Key</span>
-            </div>
-            <button class="modal-close" onclick="closeBitLockerKeyModal()">×</button>
-        </div>
-        <div class="modal-body">
-            <div style="margin-bottom:20px;">
-                <div style="font-size:12px; color:var(--text-3); margin-bottom:4px;">Device</div>
-                <div id="bkModalDevice" style="font-weight:700; color:var(--text); font-size:14px;">itsupport</div>
-            </div>
-            <div style="margin-bottom:20px;">
-                <div style="font-size:12px; color:var(--text-3); margin-bottom:4px;">Drive</div>
-                <div id="bkModalDrive" style="font-weight:700; color:var(--accent); font-size:14px;">C:</div>
-            </div>
-            <div style="margin-bottom:8px;">
-                <div style="font-size:12px; color:var(--text-3); margin-bottom:4px;">Recovery Key</div>
-                <div class="key-display-box" id="bkModalKey">000000-000000-000000-000000-000000-000000-000000-000000</div>
-            </div>
-            <p style="font-size:11px; color:var(--text-3); line-height:1.5;">Type this key exactly as shown on the BitLocker recovery screen to unlock the drive.</p>
-            <div class="btn-group" style="margin-top:24px;">
-                <button class="btn btn-primary" style="flex:1; justify-content:center;" onclick="closeBitLockerKeyModal()">Done</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Create User Modal -->
-<div class="modal-overlay" id="createUserModal" onclick="if(event.target===this) closeCreateUserModal()">
-    <div class="modal-box size-sm" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            👤 Create New Local User
-            <button class="modal-close" onclick="closeCreateUserModal()">×</button>
-        </div>
-        <div class="modal-body">
-            <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;">Creates a new <strong>Standard User</strong> account on the selected remote device.</p>
-            <div class="form-field">
-                <label>Username</label>
-                <input type="text" id="newUserName" placeholder="e.g. JohnDoe">
-            </div>
-            <div class="form-field">
-                <label>Password</label>
-                <input type="password" id="newUserPass" placeholder="••••••••">
-            </div>
-            <div class="btn-group" style="margin-top:0;">
-                <button class="btn btn-primary" style="flex:1;justify-content:center;" onclick="submitCreateUser()">✅ Create User</button>
-                <button class="btn btn-outline" onclick="closeCreateUserModal()">Cancel</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Logout Modal -->
-<div class="modal-overlay" id="logoutModal" onclick="if(event.target===this) hideLogoutModal()">
-    <div class="modal-box size-sm" onclick="event.stopPropagation()">
-        <div class="modal-header">
-            🚪 Log Out
-            <button class="modal-close" onclick="hideLogoutModal()">×</button>
-        </div>
-        <div class="modal-body">
-            <p style="font-size:14px;color:var(--text);margin-bottom:20px;text-align:center;">Are you sure you want to securely log out of the Admin Control System?</p>
-            <div class="btn-group" style="margin-top:0;">
-                <button class="btn btn-danger" style="flex:1;justify-content:center;" onclick="performLogout()">Log Out</button>
-                <button class="btn btn-outline" style="flex:1;justify-content:center;" onclick="hideLogoutModal()">Cancel</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Toast container -->
-<div class="toast-container" id="toastContainer"></div>
-
-<!-- ═══════════════════ MAIN LAYOUT ═══════════════════ -->
-
-
-
-<!-- Toolbar -->
-<div class="toolbar">
-    <div class="toolbar-logo">
-        <img src="/portal/chimera_logo.png" alt="Chimera Technologies">
-    </div>
-    <div class="toolbar-right">
-        <div style="display:flex; align-items:center; gap:12px; margin-right:16px;">
-            <select id="deviceSelect" onchange="if(typeof refreshAdminList === 'function' && document.getElementById('view-push').classList.contains('active')) refreshAdminList();" style="width:200px; padding:4px 8px; font-size:13px; border-radius:4px; border:1px solid #ced4da; height:28px;">
-                <option value="">— Select a device —</option>
-            </select>
-            <button class="btn btn-primary btn-sm" id="btnSysInfo" onclick="openSysInfoModal()" style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer; background:var(--blue); color:#fff; border:none; border-bottom:2px solid #0056b3; box-shadow:0 1px 3px rgba(0,0,0,0.1);">🖥️ System Info</button>
-            <button class="btn btn-outline btn-sm" id="btnSoftware" onclick="openSoftwareModal()" style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer;">📦 Installed Software</button>
-        </div>
-        <div class="conn-badge">
-            <span class="conn-dot" id="connectionDot"></span>
-            <span id="connectionText">Connecting…</span>
-        </div>
-        <div class="avatar-chip" title="Log Out" style="cursor: pointer;" onclick="showLogoutModal()">IT</div>
-    </div>
-</div>
-
-<!-- App Shell -->
-<div class="shell">
-
-<!-- Sidebar -->
-<aside class="sidebar">
-    <div class="sidebar-section">
-        <div class="sidebar-section-label">Dashboard</div>
-        <div class="sidebar-item active" onclick="showView('dashboard', this)">
-            <span class="si-icon">📊</span> Unified Dashboard
-        </div>
-        <div class="sidebar-item" onclick="showView('operations', this)">
-            <span class="si-icon">⚡</span> Push Operations
-        </div>
-        <div class="sidebar-item" onclick="showView('shell', this)">
-            <span class="si-icon">💻</span> Remote Shell
-        </div>
-        <div class="sidebar-item" onclick="showView('notify', this)">
-            <span class="si-icon">📢</span> Notifications
-        </div>
-    </div>
-    <div class="sidebar-section">
-        <div class="sidebar-section-label">Reports</div>
-        <div class="sidebar-item" onclick="showView('history', this)">
-            <span class="si-icon">📜</span> Command History
-        </div>
-        <div class="sidebar-item" onclick="showView('eventlogs', this)">
-            <span class="si-icon">🔍</span> Event Logs
-        </div>
-        <div class="sidebar-item" onclick="showView('activity', this)">
-            <span class="si-icon">🧭</span> Activity
-        </div>
-    </div>
-    <div class="sidebar-section">
-        <div class="sidebar-section-label">Security</div>
-        <div class="sidebar-item" onclick="showView('bitlocker', this)">
-            <span class="si-icon">🔐</span> BitLocker Keys
-        </div>
-    </div>
-</aside>
-
-<!-- Main Content -->
-<main class="main">
-
-<!-- ──────────────── DASHBOARD VIEW ──────────────── -->
-<div class="view active" id="view-dashboard">
-    <div class="page-header">
-        <div class="page-title">Unified Dashboard</div>
-        <div class="page-actions">
-            <button class="btn btn-outline btn-sm" onclick="refreshDashboard()">↻ Refresh</button>
-        </div>
-    </div>
-
-    <!-- Row 1: 4 stat tiles -->
-    <div class="widget-row cols-4">
-        <!-- Total Endpoints -->
-        <div class="widget">
-            <div class="widget-header"><span class="widget-title">Total Endpoints</span></div>
-            <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:14px 16px;">
-                <div style="font-size:40px; color:var(--text-2);">🖥️</div>
                 <div>
-                    <div style="font-size:36px; font-weight:700; line-height:1;" id="dash-total-devices">0</div>
-                    <div style="font-size:12px; color:var(--text-3);">Endpoints</div>
-                    <div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">
-                        <div class="stat-pill"><span class="dot dot-green"></span><span id="dash-active-devices">0</span> Active</div>
-                        <div class="stat-pill"><span class="dot dot-gray"></span><span id="dash-inactive-devices">0</span> Inactive</div>
+                    <div
+                        style="font-size:11px;font-weight:700;color:var(--text-2);text-transform:uppercase;margin-bottom:6px;">
+                        Result</div>
+                    <div id="cmdModalResult" class="code-block"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Event Log Details Modal -->
+    <div class="modal-overlay" id="logDetailsModal">
+        <div class="modal-box size-md" style="max-height:80vh;">
+            <div class="modal-header">
+                <span>📄 Event Log Details</span>
+                <button class="modal-close" onclick="closeLogDetailsModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="meta-grid">
+                    <strong>Event ID:</strong> <span id="logModalEventId" style="font-weight:700;"></span>
+                    <strong>Log Source:</strong><span id="logModalSource"></span>
+                    <strong>Timestamp:</strong> <span id="logModalTime"></span>
+                    <strong>Device:</strong> <span id="logModalDevice"></span>
+                    <strong>User:</strong> <span id="logModalUser"></span>
+                </div>
+                <hr style="border:0;border-top:1px solid var(--border);margin-bottom:14px;">
+                <div id="logModalMessage" class="code-block"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Info Modal -->
+    <div class="modal-overlay" id="sysInfoModal" onclick="closeSysInfoModal(event)">
+        <div class="modal-box size-md" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span>🖥️</span>
+                    <span>System Information</span>
+                    <span class="modal-sep">--</span>
+                    <span id="sysInfoDeviceName" class="modal-hostname">—</span>
+                    <span id="sysInfoStatusBadge"></span>
+                </div>
+                <button class="modal-close" onclick="closeSysInfoModal()">×</button>
+            </div>
+            <div class="modal-body" id="sysInfoBody">
+                <div class="empty-state"><span class="ei">⏳</span>Loading system information…</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Installed Software Modal -->
+    <div class="modal-overlay" id="softwareModal" onclick="closeSoftwareModal(event)">
+        <div class="modal-box size-lg" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span>📦</span>
+                    <span>Installed Software</span>
+                    <span class="modal-sep">--</span>
+                    <span id="swDeviceName" class="modal-hostname">—</span>
+                </div>
+                <button class="modal-close" onclick="closeSoftwareModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="software-toolbar">
+                    <div class="software-toolbar-left">
+                        <input id="softwareSearch" type="text" placeholder="Search name or publisher…"
+                            onkeydown="if(event.key==='Enter'){ loadSoftwareInventory(); }">
+                        <button class="btn btn-outline btn-sm" onclick="loadSoftwareInventory()">Refresh</button>
+                    </div>
+                    <div class="software-toolbar-right">
+                        <span id="swCount" class="muted-pill">0 items</span>
+                    </div>
+                </div>
+                <div id="softwareTable" class="software-table">
+                    <div class="empty-state"><span class="ei">⏳</span>Loading installed software…</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- BitLocker Key Display Modal -->
+    <div class="modal-overlay" id="bitlockerKeyModal" onclick="if(event.target===this) closeBitLockerKeyModal()">
+        <div class="modal-box size-sm" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <div class="modal-title-group">
+                    <span>🔐</span>
+                    <span>BitLocker Recovery Key</span>
+                </div>
+                <button class="modal-close" onclick="closeBitLockerKeyModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <div style="margin-bottom:20px;">
+                    <div style="font-size:12px; color:var(--text-3); margin-bottom:4px;">Device</div>
+                    <div id="bkModalDevice" style="font-weight:700; color:var(--text); font-size:14px;">itsupport</div>
+                </div>
+                <div style="margin-bottom:20px;">
+                    <div style="font-size:12px; color:var(--text-3); margin-bottom:4px;">Drive</div>
+                    <div id="bkModalDrive" style="font-weight:700; color:var(--accent); font-size:14px;">C:</div>
+                </div>
+                <div style="margin-bottom:8px;">
+                    <div style="font-size:12px; color:var(--text-3); margin-bottom:4px;">Recovery Key</div>
+                    <div class="key-display-box" id="bkModalKey">000000-000000-000000-000000-000000-000000-000000-000000
+                    </div>
+                </div>
+                <p style="font-size:11px; color:var(--text-3); line-height:1.5;">Type this key exactly as shown on the
+                    BitLocker recovery screen to unlock the drive.</p>
+                <div class="btn-group" style="margin-top:24px;">
+                    <button class="btn btn-primary" style="flex:1; justify-content:center;"
+                        onclick="closeBitLockerKeyModal()">Done</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create User Modal -->
+    <div class="modal-overlay" id="createUserModal" onclick="if(event.target===this) closeCreateUserModal()">
+        <div class="modal-box size-sm" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                👤 Create New Local User
+                <button class="modal-close" onclick="closeCreateUserModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px;color:var(--text-2);margin-bottom:16px;">Creates a new <strong>Standard
+                        User</strong> account on the selected remote device.</p>
+                <div class="form-field">
+                    <label>Username</label>
+                    <input type="text" id="newUserName" placeholder="e.g. JohnDoe">
+                </div>
+                <div class="form-field">
+                    <label>Password</label>
+                    <input type="password" id="newUserPass" placeholder="••••••••">
+                </div>
+                <div class="btn-group" style="margin-top:0;">
+                    <button class="btn btn-primary" style="flex:1;justify-content:center;"
+                        onclick="submitCreateUser()">✅ Create User</button>
+                    <button class="btn btn-outline" onclick="closeCreateUserModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Logout Modal -->
+    <div class="modal-overlay" id="logoutModal" onclick="if(event.target===this) hideLogoutModal()">
+        <div class="modal-box size-sm" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                🚪 Log Out
+                <button class="modal-close" onclick="hideLogoutModal()">×</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:14px;color:var(--text);margin-bottom:20px;text-align:center;">Are you sure you want
+                    to securely log out of the Admin Control System?</p>
+                <div class="btn-group" style="margin-top:0;">
+                    <button class="btn btn-danger" style="flex:1;justify-content:center;" onclick="performLogout()">Log
+                        Out</button>
+                    <button class="btn btn-outline" style="flex:1;justify-content:center;"
+                        onclick="hideLogoutModal()">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- OTP Modal -->
+    <div class="modal-overlay" id="otpModal" onclick="if(event.target===this) closeOtpModal()">
+        <div class="modal-box size-sm" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                🔐 Uninstall OTP Generated
+                <button class="modal-close" onclick="closeOtpModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:13px;color:var(--text-2);margin-bottom:18px;">
+                    Share this OTP with the on-site technician only.<br>
+                    Unique per device &amp; <strong>expires in 5 minutes</strong>.
+                </p>
+                <div style="text-align:center;margin-bottom:18px;">
+                    <div id="otpDeviceLabel" style="font-size:12px;color:var(--text-3);margin-bottom:6px;"></div>
+                    <div id="otpCodeDisplay"
+                        style="font-size:42px;font-weight:900;letter-spacing:10px;color:var(--accent);font-family:monospace;padding:16px;border:2px solid var(--border);border-radius:10px;background:var(--bg2);">
+                        ------</div>
+                    <button class="btn btn-outline btn-sm" onclick="copyOtp()" style="margin-top:12px;">&#128203; Copy
+                        OTP</button>
+                </div>
+                <div style="text-align:center;margin-bottom:16px;">
+                    <div style="font-size:12px;color:var(--text-3);margin-bottom:4px;">Expires in</div>
+                    <div id="otpCountdown" style="font-size:28px;font-weight:700;color:var(--red);">5:00</div>
+                </div>
+                <div
+                    style="background:rgba(239,68,68,0.08);border:1px solid rgba(239,68,68,0.25);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--text-2);">
+                    ⚠️ OTP invalidated after first use or 5 minutes, whichever comes first.
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- ═══════════════════ MAIN LAYOUT ═══════════════════ -->
+
+
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <div class="toolbar-logo">
+            <img src="/portal/chimera_logo.png" alt="Chimera Technologies">
+        </div>
+        <div class="toolbar-right">
+            <div style="display:flex; align-items:center; gap:12px; margin-right:16px;">
+                <select id="deviceSelect"
+                    onchange="if(typeof refreshAdminList === 'function' && document.getElementById('view-push').classList.contains('active')) refreshAdminList();"
+                    style="width:200px; padding:4px 8px; font-size:13px; border-radius:4px; border:1px solid #ced4da; height:28px;">
+                    <option value="">— Select a device —</option>
+                </select>
+                <button class="btn btn-primary btn-sm" id="btnSysInfo" onclick="openSysInfoModal()"
+                    style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer; background:var(--blue); color:#fff; border:none; border-bottom:2px solid #0056b3; box-shadow:0 1px 3px rgba(0,0,0,0.1);">🖥️
+                    System Info</button>
+                <button class="btn btn-outline btn-sm" id="btnSoftware" onclick="openSoftwareModal()"
+                    style="height:28px; padding:0 12px; font-size:12px; border-radius:4px; cursor:pointer;">📦 Installed
+                    Software</button>
+            </div>
+            <div class="conn-badge">
+                <span class="conn-dot" id="connectionDot"></span>
+                <span id="connectionText">Connecting…</span>
+            </div>
+            <div class="avatar-chip" title="Log Out" style="cursor: pointer;" onclick="showLogoutModal()">IT</div>
+        </div>
+    </div>
+
+    <!-- App Shell -->
+    <div class="shell">
+
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-section-label">Dashboard</div>
+                <div class="sidebar-item active" onclick="showView('dashboard', this)">
+                    <span class="si-icon">📊</span> Unified Dashboard
+                </div>
+                <div class="sidebar-item" onclick="showView('operations', this)">
+                    <span class="si-icon">⚡</span> Push Operations
+                </div>
+                <div class="sidebar-item" onclick="showView('shell', this)">
+                    <span class="si-icon">💻</span> Remote Shell
+                </div>
+                <div class="sidebar-item" onclick="showView('notify', this)">
+                    <span class="si-icon">📢</span> Notifications
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-section-label">Reports</div>
+                <div class="sidebar-item" onclick="showView('history', this)">
+                    <span class="si-icon">📜</span> Command History
+                </div>
+                <div class="sidebar-item" onclick="showView('eventlogs', this)">
+                    <span class="si-icon">🔍</span> Event Logs
+                </div>
+                <div class="sidebar-item" onclick="showView('activity', this)">
+                    <span class="si-icon">🧭</span> Activity
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-section-label">Security</div>
+                <div class="sidebar-item" onclick="showView('maintenance', this)">
+                    <span class="si-icon">🛠️</span> Maintenance
+                </div>
+                <div class="sidebar-item" onclick="showView('bitlocker', this)">
+                    <span class="si-icon">🔐</span> BitLocker Keys
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <main class="main">
+
+            <!-- ──────────────── DASHBOARD VIEW ──────────────── -->
+            <div class="view active" id="view-dashboard">
+                <div class="page-header">
+                    <div class="page-title">Unified Dashboard</div>
+                    <div class="page-actions">
+                        <button class="btn btn-outline btn-sm" onclick="refreshDashboard()">↻ Refresh</button>
+                    </div>
+                </div>
+
+                <!-- Row 1: 4 stat tiles -->
+                <div class="widget-row cols-4">
+                    <!-- Total Endpoints -->
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">Total Endpoints</span></div>
+                        <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:14px 16px;">
+                            <div style="font-size:40px; color:var(--text-2);">🖥️</div>
+                            <div>
+                                <div style="font-size:36px; font-weight:700; line-height:1;" id="dash-total-devices">0
+                                </div>
+                                <div style="font-size:12px; color:var(--text-3);">Endpoints</div>
+                                <div style="margin-top:6px; display:flex; flex-direction:column; gap:3px;">
+                                    <div class="stat-pill"><span class="dot dot-green"></span><span
+                                            id="dash-active-devices">0</span> Active</div>
+                                    <div class="stat-pill"><span class="dot dot-gray"></span><span
+                                            id="dash-inactive-devices">0</span> Inactive</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- OS Distribution -->
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">Workstations by OS</span></div>
+                        <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:12px 16px;">
+                            <div style="font-size:40px; color:var(--text-2);">💻</div>
+                            <div style="flex:1;">
+                                <div style="font-size:24px; font-weight:700;" id="dash-ws-count">0</div>
+                                <div style="font-size:12px; color:var(--text-3);">Workstations</div>
+                                <div class="os-list" id="dash-os-list" style="margin-top:8px;">
+                                    <div class="os-row"><span class="os-icon">🪟</span>
+                                        <div class="os-bar-wrap">
+                                            <div class="os-bar" style="width:0%;background:#2d87cc;"></div>
+                                        </div><span class="os-count">0</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Admin Operations -->
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">Admin Operations</span></div>
+                        <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:12px 16px;">
+                            <div style="position:relative; width:80px; height:80px;" class="chart-wrap">
+                                <canvas id="chartOpsDonut" width="80" height="80"></canvas>
+                                <div class="donut-center">
+                                    <div class="dc-num" id="dash-ops-total">0</div>
+                                    <div class="dc-label">Total</div>
+                                </div>
+                            </div>
+                            <div style="flex:1; font-size:12px; display:flex; flex-direction:column; gap:5px;">
+                                <div class="stat-pill"><span class="dot dot-green"></span> <span
+                                        id="dash-ops-grant">0</span> Grants</div>
+                                <div class="stat-pill"><span class="dot dot-red"></span> <span
+                                        id="dash-ops-revoke">0</span> Revokes</div>
+                                <div class="stat-pill"><span class="dot dot-blue"></span> <span
+                                        id="dash-ops-other">0</span> Other</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Active Admins -->
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">Active Admins Right Now</span></div>
+                        <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:14px 16px;">
+                            <div style="font-size:40px;">👑</div>
+                            <div>
+                                <div style="font-size:36px; font-weight:700; line-height:1;" id="dash-active-admins">0
+                                </div>
+                                <div style="font-size:12px; color:var(--text-3);">Users with Admin Rights</div>
+                                <div class="stat-pill" style="margin-top:6px;"><span class="dot dot-orange"></span>
+                                    <span id="dash-expiring">0</span> expiring soon</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Row 2: Activity chart + Alerts -->
+                <div class="widget-row cols-3-1">
+                    <!-- Command Activity (last 7 days bar chart) -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">Command Activity — Last 7 Days</span>
+                        </div>
+                        <div class="widget-body" style="padding: 12px 14px;">
+                            <canvas id="chartActivity" height="90"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Alerts panel -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">🔔 Alerts</span>
+                            <span id="alertCount" style="font-size:13px; font-weight:700; color:var(--red);">0</span>
+                        </div>
+                        <div class="alert-list" id="alertList">
+                            <div class="alert-item"><span class="alert-dot"
+                                    style="background:var(--text-3);"></span><span class="alert-text">No alerts at this
+                                    time.</span></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Row 3: Devices Table + Announcements -->
+                <div class="widget-row cols-2">
+                    <!-- Device Status Table -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">📋 Registered Devices</span>
+                            <button class="btn btn-outline btn-sm"
+                                onclick="showView('operations', document.querySelector('[onclick*=operations]'))">Manage
+                                →</button>
+                        </div>
+                        <div class="table-wrap" style="border:none;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Hostname</th>
+                                        <th>IP Address</th>
+                                        <th>Status</th>
+                                        <th>Last Seen</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="dashDeviceTableBody">
+                                    <tr>
+                                        <td colspan="4">
+                                            <div class="empty-state"><span class="ei">🖥️</span>No devices registered
+                                                yet</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Announcements -->
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">📣 Announcements</span></div>
+                        <div class="announce-list">
+                            <div class="announce-item">
+                                <div class="ann-title">→ Usability &amp; UI Improvements</div>
+                                <div class="ann-body">Enterprise UI revamp with drag-and-drop dashboard, sidebar
+                                    navigation, and Chart.js analytics has been deployed.</div>
+                                <div class="ann-date">March 2026</div>
+                            </div>
+                            <div class="announce-item">
+                                <div class="ann-title">→ BitLocker Key Caching</div>
+                                <div class="ann-body">Recovery keys are now automatically cached at device registration
+                                    and can be retrieved instantly by Drive ID.</div>
+                                <div class="ann-date">March 2026</div>
+                            </div>
+                            <div class="announce-item">
+                                <div class="ann-title">→ Remote Notifications</div>
+                                <div class="ann-body">IT can now send recurring Windows popup messages to multiple
+                                    devices simultaneously via campaign scheduling.</div>
+                                <div class="ann-date">Feb 2026</div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
+            <!-- end dashboard view -->
 
-        <!-- OS Distribution -->
-        <div class="widget">
-            <div class="widget-header"><span class="widget-title">Workstations by OS</span></div>
-            <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:12px 16px;">
-                <div style="font-size:40px; color:var(--text-2);">💻</div>
-                <div style="flex:1;">
-                    <div style="font-size:24px; font-weight:700;" id="dash-ws-count">0</div>
-                    <div style="font-size:12px; color:var(--text-3);">Workstations</div>
-                    <div class="os-list" id="dash-os-list" style="margin-top:8px;">
-                        <div class="os-row"><span class="os-icon">🪟</span><div class="os-bar-wrap"><div class="os-bar" style="width:0%;background:#2d87cc;"></div></div><span class="os-count">0</span></div>
+
+            <!-- ──────────────── OPERATIONS (Command Panel) VIEW ──────────────── -->
+            <div class="view" id="view-operations">
+                <div class="page-header">
+                    <div class="page-title">⚡ Push Operations</div>
+                </div>
+                <div class="ops-layout-50">
+                    <!-- Left: Command Panel -->
+                    <div>
+                        <div class="ops-card" id="commandPanel">
+                            <div class="ops-card-header">⚡ Command Panel</div>
+                            <div class="ops-card-body">
+                                <div style="font-size:13px; color:var(--text-2); margin-bottom:12px;">Target device is
+                                    selected in the global toolbar.</div>
+                                <div class="form-field">
+                                    <label>Select User</label>
+                                    <select id="userSelect" onchange="updateCommandButtons()">
+                                        <option value="">— Select a user —</option>
+                                    </select>
+                                </div>
+                                <div class="form-field" id="expiryRow">
+                                    <label>⏱ Auto-Revoke At <span
+                                            style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3);">(optional)</span></label>
+                                    <input type="datetime-local" id="expiresAtInput">
+                                </div>
+                                <div class="btn-group">
+                                    <button class="btn btn-primary" id="btnCheck" onclick="checkStatus()">🔍 Check
+                                        Status</button>
+                                    <button class="btn btn-success" id="btnGrant" onclick="grantAdmin()">✅ Grant
+                                        Admin</button>
+                                    <button class="btn btn-danger" id="btnRevoke" onclick="revokeAdmin()">🚫 Revoke
+                                        Admin</button>
+                                </div>
+                                <div class="btn-group" style="margin-top:8px;">
+                                    <button class="btn btn-outline btn-sm" id="btnCreateUser"
+                                        onclick="openCreateUserModal()">➕ Create User</button>
+                                </div>
+                                <div class="result-box" id="resultBox">
+                                    <span id="resultIcon"></span>
+                                    <span id="resultText"></span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right: Admin Users on Device -->
+                    <div class="ops-card">
+                        <div class="ops-card-header">
+                            👥 Admin Users on Device
+                            <button class="btn btn-outline btn-sm" style="margin-left:auto;"
+                                onclick="refreshAdminList()">↻ Refresh</button>
+                        </div>
+                        <div class="ops-card-body" style="padding:0;">
+                            <div class="table-wrap" style="border:none;">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>User</th>
+                                            <th>Status</th>
+                                            <th>Action</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="adminTableBody">
+                                        <tr>
+                                            <td colspan="3">
+                                                <div class="empty-state"><span class="ei">📋</span>Select a device and
+                                                    click Check Status</div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Admin Operations -->
-        <div class="widget">
-            <div class="widget-header"><span class="widget-title">Admin Operations</span></div>
-            <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:12px 16px;">
-                <div style="position:relative; width:80px; height:80px;" class="chart-wrap">
-                    <canvas id="chartOpsDonut" width="80" height="80"></canvas>
-                    <div class="donut-center"><div class="dc-num" id="dash-ops-total">0</div><div class="dc-label">Total</div></div>
-                </div>
-                <div style="flex:1; font-size:12px; display:flex; flex-direction:column; gap:5px;">
-                    <div class="stat-pill"><span class="dot dot-green"></span> <span id="dash-ops-grant">0</span> Grants</div>
-                    <div class="stat-pill"><span class="dot dot-red"></span> <span id="dash-ops-revoke">0</span> Revokes</div>
-                    <div class="stat-pill"><span class="dot dot-blue"></span> <span id="dash-ops-other">0</span> Other</div>
-                </div>
-            </div>
-        </div>
 
-        <!-- Active Admins -->
-        <div class="widget">
-            <div class="widget-header"><span class="widget-title">Active Admins Right Now</span></div>
-            <div class="widget-body" style="display:flex; gap:16px; align-items:center; padding:14px 16px;">
-                <div style="font-size:40px;">👑</div>
-                <div>
-                    <div style="font-size:36px; font-weight:700; line-height:1;" id="dash-active-admins">0</div>
-                    <div style="font-size:12px; color:var(--text-3);">Users with Admin Rights</div>
-                    <div class="stat-pill" style="margin-top:6px;"><span class="dot dot-orange"></span> <span id="dash-expiring">0</span> expiring soon</div>
+            <!-- ──────────────── REMOTE SHELL VIEW ──────────────── -->
+            <div class="view" id="view-shell">
+                <div class="page-header">
+                    <div class="page-title">💻 Remote Shell</div>
+                </div>
+                <div class="ops-card" id="shellPanel" style="max-width:900px;">
+                    <div class="ops-card-header">💻 Remote Shell Executer</div>
+                    <div class="ops-card-body">
+                        <p style="font-size:13px;color:var(--text-2);margin-bottom:14px;">Execute PowerShell scripts
+                            directly on the selected device. Runs with local system/admin rights.</p>
+                        <div class="form-field">
+                            <label>Script / Command</label>
+                            <textarea id="shellPayload" rows="5" placeholder="e.g. Get-Process | Select-Object -First 5"
+                                style="font-family:'Courier New',monospace; resize:vertical;"></textarea>
+                        </div>
+                        <div class="btn-group">
+                            <button class="btn btn-primary" id="sendShellBtn" onclick="runShellCommand()">▶️ Run
+                                Script</button>
+                            <button class="btn btn-outline" id="openTerminalBtn" onclick="openTerminal()">⚡ Interactive
+                                Terminal</button>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
 
-    <!-- Row 2: Activity chart + Alerts -->
-    <div class="widget-row cols-3-1">
-        <!-- Command Activity (last 7 days bar chart) -->
-        <div class="widget">
-            <div class="widget-header">
-                <span class="widget-title">Command Activity — Last 7 Days</span>
-            </div>
-            <div class="widget-body" style="padding: 12px 14px;">
-                <canvas id="chartActivity" height="90"></canvas>
-            </div>
-        </div>
 
-        <!-- Alerts panel -->
-        <div class="widget">
-            <div class="widget-header">
-                <span class="widget-title">🔔 Alerts</span>
-                <span id="alertCount" style="font-size:13px; font-weight:700; color:var(--red);">0</span>
-            </div>
-            <div class="alert-list" id="alertList">
-                <div class="alert-item"><span class="alert-dot" style="background:var(--text-3);"></span><span class="alert-text">No alerts at this time.</span></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Row 3: Devices Table + Announcements -->
-    <div class="widget-row cols-2">
-        <!-- Device Status Table -->
-        <div class="widget">
-            <div class="widget-header">
-                <span class="widget-title">📋 Registered Devices</span>
-                <button class="btn btn-outline btn-sm" onclick="showView('operations', document.querySelector('[onclick*=operations]'))">Manage →</button>
-            </div>
-            <div class="table-wrap" style="border:none;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Hostname</th>
-                            <th>IP Address</th>
-                            <th>Status</th>
-                            <th>Last Seen</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dashDeviceTableBody">
-                        <tr><td colspan="4"><div class="empty-state"><span class="ei">🖥️</span>No devices registered yet</div></td></tr>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-
-        <!-- Announcements -->
-        <div class="widget">
-            <div class="widget-header"><span class="widget-title">📣 Announcements</span></div>
-            <div class="announce-list">
-                <div class="announce-item">
-                    <div class="ann-title">→ Usability &amp; UI Improvements</div>
-                    <div class="ann-body">Enterprise UI revamp with drag-and-drop dashboard, sidebar navigation, and Chart.js analytics has been deployed.</div>
-                    <div class="ann-date">March 2026</div>
+            <!-- ──────────────── NOTIFICATIONS VIEW ──────────────── -->
+            <div class="view" id="view-notify">
+                <div class="page-header">
+                    <div class="page-title">📢 Remote User Notifications</div>
                 </div>
-                <div class="announce-item">
-                    <div class="ann-title">→ BitLocker Key Caching</div>
-                    <div class="ann-body">Recovery keys are now automatically cached at device registration and can be retrieved instantly by Drive ID.</div>
-                    <div class="ann-date">March 2026</div>
+
+                <div class="notify-grid">
+                    <!-- Left: Composer -->
+                    <div class="composer-card" id="notifyPanel">
+                        <div>
+                            <div class="composer-section-title">✍️ Message Composer</div>
+                            <p style="font-size: 13px; color: var(--text-3); margin-bottom: 12px;">Draft your message
+                                and configure delivery settings.</p>
+                            <textarea id="notifyMessage" class="msg-textarea"
+                                placeholder="e.g. Please save your work, the system will reboot in 15 minutes."></textarea>
+                        </div>
+
+                        <div>
+                            <div class="composer-section-title">⏱️ Scheduling</div>
+                            <select id="notifyScheduleType" class="form-select" onchange="toggleNotifySchedule()"
+                                style="width: 100%; padding: 10px;">
+                                <option value="once">Send Once Immediately</option>
+                                <option value="recurring">Recurring Campaign</option>
+                            </select>
+
+                            <div id="notifyRecurringOptions" class="recurring-config" style="display:none;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                                    <div class="form-field"><label>Start Time (Optional)</label><input
+                                            type="datetime-local" id="notifyStartTime"></div>
+                                    <div class="form-field"><label>End Time (Required)</label><input
+                                            type="datetime-local" id="notifyEndTime"></div>
+                                </div>
+                                <div class="form-field">
+                                    <label>Repeat Interval (Minutes)</label>
+                                    <input type="number" id="notifyInterval" min="1" value="5" style="width: 100%;">
+                                </div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top: auto; padding-top: 10px;">
+                            <button class="btn btn-primary" id="sendNotificationBtn"
+                                style="width: 100%; padding: 14px; font-weight: 700; font-size: 15px;"
+                                onclick="sendNotification()">
+                                🚀 Send / Start Campaign
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right: Targets -->
+                    <div class="target-panel">
+                        <div class="composer-section-title">🎯 Target Devices</div>
+                        <div class="selection-summary">
+                            <span>Selected Targets</span>
+                            <span class="count" id="notifyTargetCount">0</span>
+                        </div>
+                        <div id="notifyDeviceList" style="flex: 1;"><!-- Built by JS --></div>
+                    </div>
                 </div>
-                <div class="announce-item">
-                    <div class="ann-title">→ Remote Notifications</div>
-                    <div class="ann-body">IT can now send recurring Windows popup messages to multiple devices simultaneously via campaign scheduling.</div>
-                    <div class="ann-date">Feb 2026</div>
+
+                <!-- Active Campaigns -->
+                <div style="margin-top:20px; border-top:1px solid var(--border); padding-top:14px;">
+                    <div style="font-size:13px; font-weight:700; margin-bottom:12px;">Active Recurring Campaigns</div>
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Device</th>
+                                    <th>Message</th>
+                                    <th>Targets</th>
+                                    <th>Interval</th>
+                                    <th>Ends At</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="notifyCampaignsBody">
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="empty-state" style="padding:20px;">No active campaigns.</div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
-<!-- end dashboard view -->
 
 
-<!-- ──────────────── OPERATIONS (Command Panel) VIEW ──────────────── -->
-<div class="view" id="view-operations">
-    <div class="page-header">
-        <div class="page-title">⚡ Push Operations</div>
-    </div>
-    <div class="ops-layout-50">
-        <!-- Left: Command Panel -->
-        <div>
-            <div class="ops-card" id="commandPanel">
-                <div class="ops-card-header">⚡ Command Panel</div>
-                <div class="ops-card-body">
-                    <div style="font-size:13px; color:var(--text-2); margin-bottom:12px;">Target device is selected in the global toolbar.</div>
-                    <div class="form-field">
-                        <label>Select User</label>
-                        <select id="userSelect" onchange="updateCommandButtons()">
-                            <option value="">— Select a user —</option>
+            <!-- ──────────────── COMMAND HISTORY VIEW ──────────────── -->
+            <div class="view" id="view-history">
+                <div class="page-header">
+                    <div class="page-title">📜 Command History</div>
+                    <div class="page-actions">
+                        <button class="btn btn-outline btn-sm" id="btnExportCsv"
+                            onclick="downloadAuditExport('csv')">Export CSV</button>
+                        <button class="btn btn-primary btn-sm" id="btnExportPdf"
+                            onclick="downloadAuditExport('pdf')">Export PDF</button>
+                    </div>
+                </div>
+                <div class="ops-card">
+                    <div class="ops-card-header">📜 Command History</div>
+                    <div class="ops-card-body">
+                        <!-- Filters -->
+                        <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:16px; align-items:flex-end;">
+                            <div class="form-field" style="margin:0; flex:1; min-width:120px;">
+                                <label>Device</label>
+                                <select id="filterDevice" onchange="applyFilters()">
+                                    <option value="">All Devices</option>
+                                </select>
+                            </div>
+                            <div class="form-field" style="margin:0; flex:1; min-width:120px;">
+                                <label>Action</label>
+                                <select id="filterAction" onchange="applyFilters()">
+                                    <option value="">All Actions</option>
+                                    <option value="grant">Grant</option>
+                                    <option value="revoke">Revoke</option>
+                                    <option value="check">Check</option>
+                                    <option value="shell">Shell</option>
+                                    <option value="notify">Notify</option>
+                                    <option value="create_user">Create User</option>
+                                </select>
+                            </div>
+                            <div class="form-field" style="margin:0; flex:1; min-width:120px;">
+                                <label>Status</label>
+                                <select id="filterStatus" onchange="applyFilters()">
+                                    <option value="">All Statuses</option>
+                                    <option value="pending">Pending</option>
+                                    <option value="executing">Executing</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="failed">Failed</option>
+                                </select>
+                            </div>
+                            <div class="form-field" style="margin:0; flex:2; min-width:200px;">
+                                <label>Search Query</label>
+                                <input type="text" id="filterSearch" placeholder="Search user, result, payload…"
+                                    onkeydown="if(event.key==='Enter') applyFilters()">
+                            </div>
+                            <div style="display:flex;gap:6px;">
+                                <button class="btn btn-outline" onclick="clearFilters()">Clear</button>
+                                <button class="btn btn-primary" onclick="applyFilters()">Search</button>
+                            </div>
+                        </div>
+
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th onclick="sortBy('id')" style="cursor:pointer;">ID <span
+                                                id="sort-idx-id"></span></th>
+                                        <th onclick="sortBy('device_hostname')" style="cursor:pointer;">Device <span
+                                                id="sort-idx-device_hostname"></span></th>
+                                        <th onclick="sortBy('action')" style="cursor:pointer;">Action <span
+                                                id="sort-idx-action"></span></th>
+                                        <th onclick="sortBy('username')" style="cursor:pointer;">User <span
+                                                id="sort-idx-username"></span></th>
+                                        <th onclick="sortBy('status')" style="cursor:pointer;">Status <span
+                                                id="sort-idx-status"></span></th>
+                                        <th onclick="sortBy('result')" style="cursor:pointer;">Result <span
+                                                id="sort-idx-result"></span></th>
+                                        <th onclick="sortBy('created_at')" style="cursor:pointer;">Time <span
+                                                id="sort-idx-created_at">▼</span></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="historyTableBody">
+                                    <tr>
+                                        <td colspan="7">
+                                            <div class="empty-state"><span class="ei">📭</span>No commands yet</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="pagination-row">
+                            <div class="pag-info">
+                                <span>Showing <span id="pageInfoText">0 results</span></span>
+                                <select id="limitSelect" onchange="changeLimit()">
+                                    <option value="10">10 per page</option>
+                                    <option value="20" selected>20 per page</option>
+                                    <option value="50">50 per page</option>
+                                </select>
+                            </div>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                <button class="btn btn-outline btn-sm" id="btnPrevPage" onclick="changePage(-1)"
+                                    disabled>← Prev</button>
+                                <span style="font-size:12px;color:var(--text-2);">
+                                    Page <input type="number" id="pageJumpInput" value="1" min="1"
+                                        onkeydown="if(event.key==='Enter') jumpToPage()"
+                                        style="width:45px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center;">
+                                    of <span id="totalPagesSpan">1</span>
+                                </span>
+                                <button class="btn btn-outline btn-sm" id="btnNextPage" onclick="changePage(1)"
+                                    disabled>Next →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+
+            <!-- ──────────────── EVENT LOGS VIEW ──────────────── -->
+            <div class="view" id="view-eventlogs">
+                <div class="page-header">
+                    <div class="page-title">🔍 Event Log History</div>
+                </div>
+
+                <!-- Event Stats -->
+                <div class="widget-row cols-4" style="margin-bottom:16px;">
+                    <div class="widget">
+                        <div class="widget-body" style="text-align:center; padding:18px 14px;">
+                            <div style="font-size:32px; font-weight:700; color:var(--text);" id="statTotalEvents">0
+                            </div>
+                            <div
+                                style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">
+                                Total Events</div>
+                        </div>
+                    </div>
+                    <div class="widget">
+                        <div class="widget-body" style="text-align:center; padding:18px 14px;">
+                            <div style="font-size:32px; font-weight:700; color:#2d87cc;" id="statLogins">0</div>
+                            <div
+                                style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">
+                                Logins</div>
+                        </div>
+                    </div>
+                    <div class="widget">
+                        <div class="widget-body" style="text-align:center; padding:18px 14px;">
+                            <div style="font-size:32px; font-weight:700; color:#e74c3c;" id="statCrashes">0</div>
+                            <div
+                                style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">
+                                Crashes / Errors</div>
+                        </div>
+                    </div>
+                    <div class="widget">
+                        <div class="widget-body" style="text-align:center; padding:18px 14px;">
+                            <div style="font-size:32px; font-weight:700; color:#8e44ad;" id="statPrivilegeEvents">0
+                            </div>
+                            <div
+                                style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">
+                                Privilege Events</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ops-card">
+                    <div class="ops-card-header">🔍 Event Log History</div>
+                    <div class="ops-card-body">
+                        <!-- Filters -->
+                        <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; align-items:flex-end;">
+                            <div class="form-field" style="margin:0; flex:1; min-width:120px;">
+                                <label>Device</label>
+                                <select id="evtFilterDevice" onchange="applyEventFilters()">
+                                    <option value="">All Devices</option>
+                                </select>
+                            </div>
+                            <div class="form-field" style="margin:0; flex:1; min-width:120px;">
+                                <label>Log Source</label>
+                                <select id="evtFilterSource" onchange="applyEventFilters()">
+                                    <option value="">All Sources</option>
+                                    <option value="Security">Security</option>
+                                    <option value="System">System</option>
+                                    <option value="Application">Application</option>
+                                </select>
+                            </div>
+                            <div class="form-field" style="margin:0; flex:1; min-width:100px;">
+                                <label>Event ID</label>
+                                <input type="number" id="evtFilterEventId" placeholder="e.g. 4624"
+                                    onkeydown="if(event.key==='Enter') applyEventFilters()">
+                            </div>
+                            <div class="form-field" style="margin:0; flex:2; min-width:200px;">
+                                <label>Search</label>
+                                <input type="text" id="evtFilterSearch" placeholder="Search user, message, event name…"
+                                    onkeydown="if(event.key==='Enter') applyEventFilters()">
+                            </div>
+                            <div style="display:flex;gap:6px;">
+                                <button class="btn btn-outline" onclick="clearEventFilters()">Clear</button>
+                                <button class="btn btn-primary" onclick="applyEventFilters()">Search</button>
+                            </div>
+                        </div>
+
+                        <div class="table-wrap">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th onclick="sortEventsBy('timestamp')" style="cursor:pointer;">Time <span
+                                                id="evt-sort-timestamp">▼</span></th>
+                                        <th onclick="sortEventsBy('hostname')" style="cursor:pointer;">Device <span
+                                                id="evt-sort-hostname"></span></th>
+                                        <th onclick="sortEventsBy('username')" style="cursor:pointer;">User <span
+                                                id="evt-sort-username"></span></th>
+                                        <th onclick="sortEventsBy('event_id')" style="cursor:pointer;">Event ID <span
+                                                id="evt-sort-event_id"></span></th>
+                                        <th onclick="sortEventsBy('event_name')" style="cursor:pointer;">Event Name
+                                            <span id="evt-sort-event_name"></span></th>
+                                        <th onclick="sortEventsBy('log_source')" style="cursor:pointer;">Source <span
+                                                id="evt-sort-log_source"></span></th>
+                                        <th>Message</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="eventLogTableBody">
+                                    <tr>
+                                        <td colspan="7">
+                                            <div class="empty-state"><span class="ei">📭</span>No event logs collected
+                                                yet</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="pagination-row">
+                            <div class="pag-info">
+                                <span>Showing <span id="evtPageInfoText">0 results</span></span>
+                                <select id="evtLimitSelect" onchange="changeEventLimit()">
+                                    <option value="10">10 per page</option>
+                                    <option value="20" selected>20 per page</option>
+                                    <option value="50">50 per page</option>
+                                </select>
+                            </div>
+                            <div style="display:flex;gap:6px;align-items:center;">
+                                <button class="btn btn-outline btn-sm" id="btnEvtPrevPage" onclick="changeEventPage(-1)"
+                                    disabled>← Prev</button>
+                                <span style="font-size:12px;color:var(--text-2);">Page <input type="number"
+                                        id="evtPageJumpInput" value="1" min="1"
+                                        onkeydown="if(event.key==='Enter') jumpToEventPage()"
+                                        style="width:45px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center;">
+                                    of <span id="evtTotalPagesSpan">1</span></span>
+                                <button class="btn btn-outline btn-sm" id="btnEvtNextPage" onclick="changeEventPage(1)"
+                                    disabled>Next →</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ──────────────── ACTIVITY VIEW ──────────────── -->
+            <div class="view" id="view-activity">
+                <div class="page-header">
+                    <div class="page-title">🧭 User Activity</div>
+                </div>
+
+                <div class="filter-grid" style="margin-bottom:12px;">
+                    <div class="form-field" style="margin:0;">
+                        <label>Device</label>
+                        <select id="activityDevice">
+                            <option value="">All devices</option>
                         </select>
                     </div>
-                    <div class="form-field" id="expiryRow">
-                        <label>⏱ Auto-Revoke At <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--text-3);">(optional)</span></label>
-                        <input type="datetime-local" id="expiresAtInput">
+                    <div class="form-field" style="margin:0;">
+                        <label>Search</label>
+                        <input id="activitySearch" type="text" placeholder="Window title or process"
+                            onkeydown="if(event.key==='Enter') loadActivity(1)">
                     </div>
-                    <div class="btn-group">
-                        <button class="btn btn-primary" id="btnCheck" onclick="checkStatus()">🔍 Check Status</button>
-                        <button class="btn btn-success" id="btnGrant" onclick="grantAdmin()">✅ Grant Admin</button>
-                        <button class="btn btn-danger" id="btnRevoke" onclick="revokeAdmin()">🚫 Revoke Admin</button>
+                    <div class="form-field" style="margin:0;">
+                        <label>From (UTC)</label>
+                        <input id="activityFrom" type="datetime-local">
                     </div>
-                    <div class="btn-group" style="margin-top:8px;">
-                        <button class="btn btn-outline btn-sm" id="btnCreateUser" onclick="openCreateUserModal()">➕ Create User</button>
+                    <div class="form-field" style="margin:0;">
+                        <label>To (UTC)</label>
+                        <input id="activityTo" type="datetime-local">
                     </div>
-                    <div class="result-box" id="resultBox">
-                        <span id="resultIcon"></span>
-                        <span id="resultText"></span>
+                    <div style="display:flex; align-items:flex-end;">
+                        <button class="btn btn-primary" onclick="loadActivity(1)">Apply</button>
                     </div>
                 </div>
-            </div>
-        </div>
 
-        <!-- Right: Admin Users on Device -->
-        <div class="ops-card">
-            <div class="ops-card-header">
-                👥 Admin Users on Device
-                <button class="btn btn-outline btn-sm" style="margin-left:auto;" onclick="refreshAdminList()">↻ Refresh</button>
-            </div>
-            <div class="ops-card-body" style="padding:0;">
-                <div class="table-wrap" style="border:none;">
-                    <table>
-                        <thead><tr><th>User</th><th>Status</th><th>Action</th></tr></thead>
-                        <tbody id="adminTableBody">
-                            <tr><td colspan="3"><div class="empty-state"><span class="ei">📋</span>Select a device and click Check Status</div></td></tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-
-<!-- ──────────────── REMOTE SHELL VIEW ──────────────── -->
-<div class="view" id="view-shell">
-    <div class="page-header"><div class="page-title">💻 Remote Shell</div></div>
-    <div class="ops-card" id="shellPanel" style="max-width:900px;">
-        <div class="ops-card-header">💻 Remote Shell Executer</div>
-        <div class="ops-card-body">
-            <p style="font-size:13px;color:var(--text-2);margin-bottom:14px;">Execute PowerShell scripts directly on the selected device. Runs with local system/admin rights.</p>
-            <div class="form-field">
-                <label>Script / Command</label>
-                <textarea id="shellPayload" rows="5" placeholder="e.g. Get-Process | Select-Object -First 5" style="font-family:'Courier New',monospace; resize:vertical;"></textarea>
-            </div>
-            <div class="btn-group">
-                <button class="btn btn-primary" id="sendShellBtn" onclick="runShellCommand()">▶️ Run Script</button>
-                <button class="btn btn-outline" id="openTerminalBtn" onclick="openTerminal()">⚡ Interactive Terminal</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-
-<!-- ──────────────── NOTIFICATIONS VIEW ──────────────── -->
-<div class="view" id="view-notify">
-    <div class="page-header">
-        <div class="page-title">📢 Remote User Notifications</div>
-    </div>
-    
-    <div class="notify-grid">
-        <!-- Left: Composer -->
-        <div class="composer-card" id="notifyPanel">
-            <div>
-                <div class="composer-section-title">✍️ Message Composer</div>
-                <p style="font-size: 13px; color: var(--text-3); margin-bottom: 12px;">Draft your message and configure delivery settings.</p>
-                <textarea id="notifyMessage" class="msg-textarea" placeholder="e.g. Please save your work, the system will reboot in 15 minutes."></textarea>
-            </div>
-
-            <div>
-                <div class="composer-section-title">⏱️ Scheduling</div>
-                <select id="notifyScheduleType" class="form-select" onchange="toggleNotifySchedule()" style="width: 100%; padding: 10px;">
-                    <option value="once">Send Once Immediately</option>
-                    <option value="recurring">Recurring Campaign</option>
-                </select>
-
-                <div id="notifyRecurringOptions" class="recurring-config" style="display:none;">
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
-                        <div class="form-field"><label>Start Time (Optional)</label><input type="datetime-local" id="notifyStartTime"></div>
-                        <div class="form-field"><label>End Time (Required)</label><input type="datetime-local" id="notifyEndTime"></div>
+                <div class="widget">
+                    <div class="widget-header">
+                        <span class="widget-title">Activity Stream</span>
+                        <span id="activityTotal" class="muted-pill">0 events</span>
                     </div>
-                    <div class="form-field">
-                        <label>Repeat Interval (Minutes)</label>
-                        <input type="number" id="notifyInterval" min="1" value="5" style="width: 100%;">
+                    <div class="widget-body">
+                        <div class="table-responsive">
+                            <table class="table compact">
+                                <thead>
+                                    <tr>
+                                        <th style="width:180px;">Time (UTC)</th>
+                                        <th style="width:170px;">Device</th>
+                                        <th>Window Title</th>
+                                        <th style="width:160px;">Process</th>
+                                        <th style="width:90px;">Idle</th>
+                                        <th style="width:90px;">Input</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="activityTableBody">
+                                    <tr>
+                                        <td colspan="6">
+                                            <div class="empty-state"><span class="ei">⏳</span>Loading…</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="pagination-row">
+                            <div id="activityPageInfo" class="pag-info">0 results</div>
+                            <div style="display:flex; gap:8px; align-items:center;">
+                                <button class="btn btn-outline btn-sm" id="btnActivityPrev"
+                                    onclick="activityPrevPage()">Prev</button>
+                                <span id="activityPageNumber" style="min-width:40px; text-align:center;">1</span>
+                                <button class="btn btn-outline btn-sm" id="btnActivityNext"
+                                    onclick="activityNextPage()">Next</button>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
 
-            <div style="margin-top: auto; padding-top: 10px;">
-                <button class="btn btn-primary" id="sendNotificationBtn" style="width: 100%; padding: 14px; font-weight: 700; font-size: 15px;" onclick="sendNotification()">
-                    🚀 Send / Start Campaign
-                </button>
-            </div>
-        </div>
 
-        <!-- Right: Targets -->
-        <div class="target-panel">
-            <div class="composer-section-title">🎯 Target Devices</div>
-            <div class="selection-summary">
-                <span>Selected Targets</span>
-                <span class="count" id="notifyTargetCount">0</span>
-            </div>
-            <div id="notifyDeviceList" style="flex: 1;"><!-- Built by JS --></div>
-        </div>
-    </div>
+            <!-- ──────────────── MAINTENANCE VIEW ──────────────── -->
+            <div class="view" id="view-maintenance">
+                <div class="page-header">
+                    <div class="page-title">🛠️ Endpoint Maintenance</div>
+                    <div class="page-actions">
+                        <span class="badge badge-info">Latest: <span id="latestVersionLabel">—</span></span>
+                    </div>
+                </div>
 
-            <!-- Active Campaigns -->
-            <div style="margin-top:20px; border-top:1px solid var(--border); padding-top:14px;">
-                <div style="font-size:13px; font-weight:700; margin-bottom:12px;">Active Recurring Campaigns</div>
-                <div class="table-wrap">
-                    <table>
-                        <thead><tr><th>Device</th><th>Message</th><th>Targets</th><th>Interval</th><th>Ends At</th><th>Action</th></tr></thead>
-                        <tbody id="notifyCampaignsBody">
-                            <tr><td colspan="6"><div class="empty-state" style="padding:20px;">No active campaigns.</div></td></tr>
-                        </tbody>
-                    </table>
+                <div class="widget-row cols-2">
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">🔒 Protected Uninstall OTP</span></div>
+                        <div class="widget-body">
+                            <label>Target Device</label>
+                            <select id="otpDeviceSelect" class="form-select" style="width:100%; margin-bottom:10px;">
+                                <option value="">— Select a device —</option>
+                            </select>
+                            <button class="btn btn-primary" id="btnGenerateOtp"
+                                onclick="generateOtpForDevice()">Generate OTP</button>
+                            <div id="otpResultText" style="margin-top:12px; font-weight:700;"></div>
+                            <p style="font-size:12px; color:var(--text-3); margin-top:8px;">OTP is unique per device and
+                                expires in 5 minutes.</p>
+                        </div>
+                    </div>
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">🛡️ Device Patch Status</span></div>
+                        <div class="widget-body">
+                            <label>Device</label>
+                            <select id="patchDeviceSelect" class="form-select" onchange="renderPatchStatus()"
+                                style="width:100%; margin-bottom:8px;">
+                                <option value="">All devices</option>
+                            </select>
+                            <div id="patchStatusBox" class="sysinfo-grid" style="margin-top:10px;"></div>
+                        </div>
+                    </div>
                 </div>
-            </div>
-</div>
 
-
-<!-- ──────────────── COMMAND HISTORY VIEW ──────────────── -->
-<div class="view" id="view-history">
-    <div class="page-header">
-        <div class="page-title">📜 Command History</div>
-        <div class="page-actions">
-            <button class="btn btn-outline btn-sm" id="btnExportCsv" onclick="downloadAuditExport('csv')">Export CSV</button>
-            <button class="btn btn-primary btn-sm" id="btnExportPdf" onclick="downloadAuditExport('pdf')">Export PDF</button>
-        </div>
-    </div>
-    <div class="ops-card">
-        <div class="ops-card-header">📜 Command History</div>
-        <div class="ops-card-body">
-            <!-- Filters -->
-            <div style="display:flex; flex-wrap:wrap; gap:12px; margin-bottom:16px; align-items:flex-end;">
-                <div class="form-field" style="margin:0; flex:1; min-width:120px;">
-                    <label>Device</label>
-                    <select id="filterDevice" onchange="applyFilters()"><option value="">All Devices</option></select>
-                </div>
-                <div class="form-field" style="margin:0; flex:1; min-width:120px;">
-                    <label>Action</label>
-                    <select id="filterAction" onchange="applyFilters()">
-                        <option value="">All Actions</option>
-                        <option value="grant">Grant</option>
-                        <option value="revoke">Revoke</option>
-                        <option value="check">Check</option>
-                        <option value="shell">Shell</option>
-                        <option value="notify">Notify</option>
-                        <option value="create_user">Create User</option>
-                    </select>
-                </div>
-                <div class="form-field" style="margin:0; flex:1; min-width:120px;">
-                    <label>Status</label>
-                    <select id="filterStatus" onchange="applyFilters()">
-                        <option value="">All Statuses</option>
-                        <option value="pending">Pending</option>
-                        <option value="executing">Executing</option>
-                        <option value="completed">Completed</option>
-                        <option value="failed">Failed</option>
-                    </select>
-                </div>
-                <div class="form-field" style="margin:0; flex:2; min-width:200px;">
-                    <label>Search Query</label>
-                    <input type="text" id="filterSearch" placeholder="Search user, result, payload…" onkeydown="if(event.key==='Enter') applyFilters()">
-                </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn btn-outline" onclick="clearFilters()">Clear</button>
-                    <button class="btn btn-primary" onclick="applyFilters()">Search</button>
-                </div>
-            </div>
-
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th onclick="sortBy('id')" style="cursor:pointer;">ID <span id="sort-idx-id"></span></th>
-                            <th onclick="sortBy('device_hostname')" style="cursor:pointer;">Device <span id="sort-idx-device_hostname"></span></th>
-                            <th onclick="sortBy('action')" style="cursor:pointer;">Action <span id="sort-idx-action"></span></th>
-                            <th onclick="sortBy('username')" style="cursor:pointer;">User <span id="sort-idx-username"></span></th>
-                            <th onclick="sortBy('status')" style="cursor:pointer;">Status <span id="sort-idx-status"></span></th>
-                            <th onclick="sortBy('result')" style="cursor:pointer;">Result <span id="sort-idx-result"></span></th>
-                            <th onclick="sortBy('created_at')" style="cursor:pointer;">Time <span id="sort-idx-created_at">▼</span></th>
-                        </tr>
-                    </thead>
-                    <tbody id="historyTableBody">
-                        <tr><td colspan="7"><div class="empty-state"><span class="ei">📭</span>No commands yet</div></td></tr>
-                    </tbody>
-                </table>
-            </div>
-            <div class="pagination-row">
-                <div class="pag-info">
-                    <span>Showing <span id="pageInfoText">0 results</span></span>
-                    <select id="limitSelect" onchange="changeLimit()">
-                        <option value="10">10 per page</option>
-                        <option value="20" selected>20 per page</option>
-                        <option value="50">50 per page</option>
-                    </select>
-                </div>
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <button class="btn btn-outline btn-sm" id="btnPrevPage" onclick="changePage(-1)" disabled>← Prev</button>
-                    <span style="font-size:12px;color:var(--text-2);">
-                        Page <input type="number" id="pageJumpInput" value="1" min="1" onkeydown="if(event.key==='Enter') jumpToPage()" style="width:45px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center;"> of <span id="totalPagesSpan">1</span>
-                    </span>
-                    <button class="btn btn-outline btn-sm" id="btnNextPage" onclick="changePage(1)" disabled>Next →</button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-
-<!-- ──────────────── EVENT LOGS VIEW ──────────────── -->
-<div class="view" id="view-eventlogs">
-    <div class="page-header"><div class="page-title">🔍 Event Log History</div></div>
-
-    <!-- Event Stats -->
-    <div class="widget-row cols-4" style="margin-bottom:16px;">
-        <div class="widget"><div class="widget-body" style="text-align:center; padding:18px 14px;">
-            <div style="font-size:32px; font-weight:700; color:var(--text);" id="statTotalEvents">0</div>
-            <div style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">Total Events</div>
-        </div></div>
-        <div class="widget"><div class="widget-body" style="text-align:center; padding:18px 14px;">
-            <div style="font-size:32px; font-weight:700; color:#2d87cc;" id="statLogins">0</div>
-            <div style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">Logins</div>
-        </div></div>
-        <div class="widget"><div class="widget-body" style="text-align:center; padding:18px 14px;">
-            <div style="font-size:32px; font-weight:700; color:#e74c3c;" id="statCrashes">0</div>
-            <div style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">Crashes / Errors</div>
-        </div></div>
-        <div class="widget"><div class="widget-body" style="text-align:center; padding:18px 14px;">
-            <div style="font-size:32px; font-weight:700; color:#8e44ad;" id="statPrivilegeEvents">0</div>
-            <div style="font-size:11px; color:var(--text-3); text-transform:uppercase; margin-top:4px; letter-spacing:0.5px;">Privilege Events</div>
-        </div></div>
-    </div>
-
-    <div class="ops-card">
-        <div class="ops-card-header">🔍 Event Log History</div>
-        <div class="ops-card-body">
-            <!-- Filters -->
-            <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:16px; align-items:flex-end;">
-                <div class="form-field" style="margin:0; flex:1; min-width:120px;">
-                    <label>Device</label>
-                    <select id="evtFilterDevice" onchange="applyEventFilters()"><option value="">All Devices</option></select>
-                </div>
-                <div class="form-field" style="margin:0; flex:1; min-width:120px;">
-                    <label>Log Source</label>
-                    <select id="evtFilterSource" onchange="applyEventFilters()">
-                        <option value="">All Sources</option>
-                        <option value="Security">Security</option>
-                        <option value="System">System</option>
-                        <option value="Application">Application</option>
-                    </select>
-                </div>
-                <div class="form-field" style="margin:0; flex:1; min-width:100px;">
-                    <label>Event ID</label>
-                    <input type="number" id="evtFilterEventId" placeholder="e.g. 4624" onkeydown="if(event.key==='Enter') applyEventFilters()">
-                </div>
-                <div class="form-field" style="margin:0; flex:2; min-width:200px;">
-                    <label>Search</label>
-                    <input type="text" id="evtFilterSearch" placeholder="Search user, message, event name…" onkeydown="if(event.key==='Enter') applyEventFilters()">
-                </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn btn-outline" onclick="clearEventFilters()">Clear</button>
-                    <button class="btn btn-primary" onclick="applyEventFilters()">Search</button>
+                <div class="widget-row cols-2">
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">⬆️ Upload Agent Update</span></div>
+                        <div class="widget-body">
+                            <div class="form-field">
+                                <label>Version</label>
+                                <input type="text" id="uploadVersionInput" placeholder="e.g. 1.1.0">
+                            </div>
+                            <div class="form-field">
+                                <label>Binary (.exe)</label>
+                                <input type="file" id="uploadFileInput" accept=".exe">
+                            </div>
+                            <div class="form-field">
+                                <label>Release Notes</label>
+                                <textarea id="uploadNotesInput" rows="3"
+                                    placeholder="Optional notes visible to admins"></textarea>
+                            </div>
+                            <button class="btn btn-success" id="btnUploadVersion"
+                                onclick="uploadAgentVersion(event)">Upload</button>
+                        </div>
+                    </div>
+                    <div class="widget">
+                        <div class="widget-header"><span class="widget-title">📦 Agent Versions</span></div>
+                        <div class="table-wrap" style="border:none;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Version</th>
+                                        <th>Platform</th>
+                                        <th>Created</th>
+                                        <th>Size</th>
+                                        <th>Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="versionTableBody">
+                                    <tr>
+                                        <td colspan="5">
+                                            <div class="empty-state"><span class="ei">⬆️</span>No agent builds yet</div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th onclick="sortEventsBy('timestamp')" style="cursor:pointer;">Time <span id="evt-sort-timestamp">▼</span></th>
-                            <th onclick="sortEventsBy('hostname')" style="cursor:pointer;">Device <span id="evt-sort-hostname"></span></th>
-                            <th onclick="sortEventsBy('username')" style="cursor:pointer;">User <span id="evt-sort-username"></span></th>
-                            <th onclick="sortEventsBy('event_id')" style="cursor:pointer;">Event ID <span id="evt-sort-event_id"></span></th>
-                            <th onclick="sortEventsBy('event_name')" style="cursor:pointer;">Event Name <span id="evt-sort-event_name"></span></th>
-                            <th onclick="sortEventsBy('log_source')" style="cursor:pointer;">Source <span id="evt-sort-log_source"></span></th>
-                            <th>Message</th>
-                        </tr>
-                    </thead>
-                    <tbody id="eventLogTableBody">
-                        <tr><td colspan="7"><div class="empty-state"><span class="ei">📭</span>No event logs collected yet</div></td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="pagination-row">
-                <div class="pag-info">
-                    <span>Showing <span id="evtPageInfoText">0 results</span></span>
-                    <select id="evtLimitSelect" onchange="changeEventLimit()">
-                        <option value="10">10 per page</option>
-                        <option value="20" selected>20 per page</option>
-                        <option value="50">50 per page</option>
-                    </select>
+            <!-- ──────────────── BITLOCKER VIEW ──────────────── -->
+            <div class="view" id="view-bitlocker">
+                <div class="page-header">
+                    <div class="page-title">🔐 BitLocker Recovery Keys</div>
                 </div>
-                <div style="display:flex;gap:6px;align-items:center;">
-                    <button class="btn btn-outline btn-sm" id="btnEvtPrevPage" onclick="changeEventPage(-1)" disabled>← Prev</button>
-                    <span style="font-size:12px;color:var(--text-2);">Page <input type="number" id="evtPageJumpInput" value="1" min="1" onkeydown="if(event.key==='Enter') jumpToEventPage()" style="width:45px;padding:3px 6px;border:1px solid var(--border);border-radius:4px;text-align:center;"> of <span id="evtTotalPagesSpan">1</span></span>
-                    <button class="btn btn-outline btn-sm" id="btnEvtNextPage" onclick="changeEventPage(1)" disabled>Next →</button>
+                <div class="ops-layout">
+                    <div class="ops-card" style="max-width:400px;">
+                        <div class="ops-card-header">🔐 Get Recovery Key</div>
+                        <div class="ops-card-body">
+                            <p style="font-size:13px; color:var(--text-2); margin-bottom:16px;">Select any registered
+                                device and enter a drive letter to instantly retrieve its BitLocker recovery key.</p>
+                            <div class="form-field">
+                                <label>Target Device</label>
+                                <select id="bitlockerDevice">
+                                    <option value="">— Select a device —</option>
+                                </select>
+                            </div>
+                            <div class="form-field">
+                                <label>Drive Letter</label>
+                                <input type="text" id="bitlockerDrive" placeholder="e.g. C:" maxlength="3"
+                                    style="width:100px;">
+                            </div>
+                            <button class="btn btn-primary" style="width:100%;justify-content:center;"
+                                onclick="getBitLockerKeyStandalone()">🔑 Get Recovery Key</button>
+                            <p style="font-size:11px; color:var(--text-3); margin-top:10px;">Result will also appear in
+                                the Command History tab.</p>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-    </div>
-</div>
 
-<!-- ──────────────── ACTIVITY VIEW ──────────────── -->
-<div class="view" id="view-activity">
-    <div class="page-header"><div class="page-title">🧭 User Activity</div></div>
+        </main>
+    </div><!-- /shell -->
 
-    <div class="filter-grid" style="margin-bottom:12px;">
-        <div class="form-field" style="margin:0;">
-            <label>Device</label>
-            <select id="activityDevice">
-                <option value="">All devices</option>
-            </select>
-        </div>
-        <div class="form-field" style="margin:0;">
-            <label>Search</label>
-            <input id="activitySearch" type="text" placeholder="Window title or process" onkeydown="if(event.key==='Enter') loadActivity(1)">
-        </div>
-        <div class="form-field" style="margin:0;">
-            <label>From (UTC)</label>
-            <input id="activityFrom" type="datetime-local">
-        </div>
-        <div class="form-field" style="margin:0;">
-            <label>To (UTC)</label>
-            <input id="activityTo" type="datetime-local">
-        </div>
-        <div style="display:flex; align-items:flex-end;">
-            <button class="btn btn-primary" onclick="loadActivity(1)">Apply</button>
-        </div>
-    </div>
+    <script src="/portal/dashboard.js"></script>
+    <script>
+        // ── Sidebar Navigation ──────────────────────────────
+        function showView(id, el) {
+            document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+            document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
+            const v = document.getElementById('view-' + id);
+            if (v) v.classList.add('active');
+            if (el) el.classList.add('active');
 
-    <div class="widget">
-        <div class="widget-header">
-            <span class="widget-title">Activity Stream</span>
-            <span id="activityTotal" class="muted-pill">0 events</span>
-        </div>
-        <div class="widget-body">
-            <div class="table-responsive">
-                <table class="table compact">
-                    <thead>
-                        <tr>
-                            <th style="width:180px;">Time (UTC)</th>
-                            <th style="width:170px;">Device</th>
-                            <th>Window Title</th>
-                            <th style="width:160px;">Process</th>
-                            <th style="width:90px;">Idle</th>
-                            <th style="width:90px;">Input</th>
-                        </tr>
-                    </thead>
-                    <tbody id="activityTableBody">
-                        <tr><td colspan="6"><div class="empty-state"><span class="ei">⏳</span>Loading…</div></td></tr>
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="pagination-row">
-                <div id="activityPageInfo" class="pag-info">0 results</div>
-                <div style="display:flex; gap:8px; align-items:center;">
-                    <button class="btn btn-outline btn-sm" id="btnActivityPrev" onclick="activityPrevPage()">Prev</button>
-                    <span id="activityPageNumber" style="min-width:40px; text-align:center;">1</span>
-                    <button class="btn btn-outline btn-sm" id="btnActivityNext" onclick="activityNextPage()">Next</button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-
-<!-- ──────────────── BITLOCKER VIEW ──────────────── -->
-<div class="view" id="view-bitlocker">
-    <div class="page-header"><div class="page-title">🔐 BitLocker Recovery Keys</div></div>
-    <div class="ops-layout">
-        <div class="ops-card" style="max-width:400px;">
-            <div class="ops-card-header">🔐 Get Recovery Key</div>
-            <div class="ops-card-body">
-                <p style="font-size:13px; color:var(--text-2); margin-bottom:16px;">Select any registered device and enter a drive letter to instantly retrieve its BitLocker recovery key.</p>
-                <div class="form-field">
-                    <label>Target Device</label>
-                    <select id="bitlockerDevice">
-                        <option value="">— Select a device —</option>
-                    </select>
-                </div>
-                <div class="form-field">
-                    <label>Drive Letter</label>
-                    <input type="text" id="bitlockerDrive" placeholder="e.g. C:" maxlength="3" style="width:100px;">
-                </div>
-                <button class="btn btn-primary" style="width:100%;justify-content:center;" onclick="getBitLockerKeyStandalone()">🔑 Get Recovery Key</button>
-                <p style="font-size:11px; color:var(--text-3); margin-top:10px;">Result will also appear in the Command History tab.</p>
-            </div>
-        </div>
-    </div>
-</div>
-
-</main>
-</div><!-- /shell -->
-
-<script src="/portal/dashboard.js"></script>
-<script>
-// ── Sidebar Navigation ──────────────────────────────
-function showView(id, el) {
-    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
-    document.querySelectorAll('.sidebar-item').forEach(s => s.classList.remove('active'));
-    const v = document.getElementById('view-' + id);
-    if (v) v.classList.add('active');
-    if (el) el.classList.add('active');
-
-    if (id === 'activity') {
-        loadActivity();
-    }
-}
-
-// ── Dashboard Charts & Widgets ──────────────────────
-let activityChart = null;
-let opsChart = null;
-
-function initCharts() {
-    // Operations donut
-    const opsCtx = document.getElementById('chartOpsDonut');
-    if (opsCtx) {
-        opsChart = new Chart(opsCtx, {
-            type: 'doughnut',
-            data: {
-                datasets: [{
-                    data: [0, 0, 1],
-                    backgroundColor: ['#27ae60', '#e74c3c', '#2d87cc'],
-                    borderWidth: 0,
-                    hoverOffset: 4
-                }]
-            },
-            options: {
-                cutout: '72%',
-                plugins: { legend: { display: false }, tooltip: { enabled: false } },
-                animation: { duration: 800 }
+            if (id === 'activity') {
+                loadActivity();
             }
-        });
-    }
-
-    // 7-day activity bar chart
-    const actCtx = document.getElementById('chartActivity');
-    if (actCtx) {
-        const labels = [];
-        for (let i = 6; i >= 0; i--) {
-            const d = new Date();
-            d.setDate(d.getDate() - i);
-            labels.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
-        }
-        activityChart = new Chart(actCtx, {
-            type: 'bar',
-            data: {
-                labels,
-                datasets: [
-                    { label: 'Grant', data: [0,0,0,0,0,0,0], backgroundColor: '#27ae60', borderRadius: 4 },
-                    { label: 'Revoke', data: [0,0,0,0,0,0,0], backgroundColor: '#e74c3c', borderRadius: 4 },
-                    { label: 'Other', data: [0,0,0,0,0,0,0], backgroundColor: '#2d87cc', borderRadius: 4 },
-                ]
-            },
-            options: {
-                responsive: true,
-                plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } } },
-                scales: {
-                    x: { grid: { display: false }, ticks: { font: { size: 10 } } },
-                    y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } }, grid: { color: '#f0f2f5' } }
-                },
-                animation: { duration: 800 }
+            if (id === 'maintenance') {
+                if (typeof loadAgentVersions === 'function') loadAgentVersions(true);
+                if (typeof renderPatchStatus === 'function') renderPatchStatus();
             }
-        });
-    }
-}
-
-function refreshDashboard() {
-    // Pull from the global devices and commands data that dashboard.js already fetches
-    if (typeof window._allDevices !== 'undefined') updateDashboardWidgets();
-}
-
-function updateDashboardWidgets() {
-    const devices = window._allDevices || [];
-    const commands = window._allCommands || [];
-
-    // Totals
-    const total = devices.length;
-    const active = devices.filter(d => {
-        if (!d.last_seen) return false;
-        const diff = Date.now() - new Date(d.last_seen);
-        return diff < 30 * 1000 && diff > -60 * 1000; // 30s threshold, 60s future drift guard
-    }).length;
-    document.getElementById('dash-total-devices').textContent = total;
-    document.getElementById('dash-active-devices').textContent = active;
-    document.getElementById('dash-inactive-devices').textContent = total - active;
-    document.getElementById('dash-ws-count').textContent = total;
-
-    // Admin ops stats
-    const grants  = commands.filter(c => c.action === 'grant').length;
-    const revokes = commands.filter(c => c.action === 'revoke').length;
-    const other   = commands.filter(c => c.action !== 'grant' && c.action !== 'revoke').length;
-    const opsTotal = grants + revokes + other;
-    document.getElementById('dash-ops-total').textContent  = opsTotal;
-    document.getElementById('dash-ops-grant').textContent  = grants;
-    document.getElementById('dash-ops-revoke').textContent = revokes;
-    document.getElementById('dash-ops-other').textContent  = other;
-    if (opsChart) {
-        opsChart.data.datasets[0].data = [grants || 0, revokes || 0, Math.max(other, 1)];
-        opsChart.update();
-    }
-
-    // Current admins count
-    let adminCount = 0;
-    devices.forEach(d => {
-        if (d.system_info) {
-            try {
-                const si = typeof d.system_info === 'string' ? JSON.parse(d.system_info) : d.system_info;
-                if (si && si.local_admins) adminCount += si.local_admins.length;
-            } catch(e) {}
         }
-    });
-    document.getElementById('dash-active-admins').textContent = adminCount;
-    document.getElementById('dash-expiring').textContent = commands.filter(c => c.expires_at && new Date(c.expires_at) > new Date()).length;
 
-    // Alerts panel
-    const alertList = document.getElementById('alertList');
-    const alertCount = document.getElementById('alertCount');
-    const alerts = [];
-    if (total === 0) alerts.push({ color: '#f39c12', text: 'No devices registered. Install the agent to get started.' });
-    if (active < total) alerts.push({ color: '#e74c3c', text: `${total - active} device(s) are offline or not recently seen.` });
-    const failedCmds = commands.filter(c => c.status === 'failed').length;
-    if (failedCmds > 0) alerts.push({ color: '#e74c3c', text: `${failedCmds} command(s) failed. Check Command History for details.` });
+        // ── Dashboard Charts & Widgets ──────────────────────
+        let activityChart = null;
+        let opsChart = null;
 
-    alertCount.textContent = alerts.length;
-    alertList.innerHTML = alerts.length === 0
-        ? '<div class="alert-item"><span class="alert-dot" style="background:#27ae60;"></span><span class="alert-text">✅ No alerts — all systems nominal.</span></div>'
-        : alerts.map(a => `<div class="alert-item"><span class="alert-dot" style="background:${a.color};"></span><span class="alert-text">${a.text}</span></div>`).join('');
+        function initCharts() {
+            // Operations donut
+            const opsCtx = document.getElementById('chartOpsDonut');
+            if (opsCtx) {
+                opsChart = new Chart(opsCtx, {
+                    type: 'doughnut',
+                    data: {
+                        datasets: [{
+                            data: [0, 0, 1],
+                            backgroundColor: ['#27ae60', '#e74c3c', '#2d87cc'],
+                            borderWidth: 0,
+                            hoverOffset: 4
+                        }]
+                    },
+                    options: {
+                        cutout: '72%',
+                        plugins: { legend: { display: false }, tooltip: { enabled: false } },
+                        animation: { duration: 800 }
+                    }
+                });
+            }
 
-    // Device table
-    const tbody = document.getElementById('dashDeviceTableBody');
-    tbody.innerHTML = devices.length === 0
-        ? '<tr><td colspan="4"><div class="empty-state"><span class="ei">🖥️</span>No devices registered yet</div></td></tr>'
-        : devices.slice(0, 8).map(d => {
-            const diff = Date.now() - new Date(d.last_seen);
-            const isOn = d.last_seen && diff < 30 * 1000 && diff > -60 * 1000;
-            const when = d.last_seen ? new Date(d.last_seen).toLocaleString() : 'Never';
-            return `<tr>
+            // 7-day activity bar chart
+            const actCtx = document.getElementById('chartActivity');
+            if (actCtx) {
+                const labels = [];
+                for (let i = 6; i >= 0; i--) {
+                    const d = new Date();
+                    d.setDate(d.getDate() - i);
+                    labels.push(d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }));
+                }
+                activityChart = new Chart(actCtx, {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [
+                            { label: 'Grant', data: [0, 0, 0, 0, 0, 0, 0], backgroundColor: '#27ae60', borderRadius: 4 },
+                            { label: 'Revoke', data: [0, 0, 0, 0, 0, 0, 0], backgroundColor: '#e74c3c', borderRadius: 4 },
+                            { label: 'Other', data: [0, 0, 0, 0, 0, 0, 0], backgroundColor: '#2d87cc', borderRadius: 4 },
+                        ]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: { legend: { position: 'bottom', labels: { font: { size: 11 }, boxWidth: 12 } } },
+                        scales: {
+                            x: { grid: { display: false }, ticks: { font: { size: 10 } } },
+                            y: { beginAtZero: true, ticks: { stepSize: 1, font: { size: 10 } }, grid: { color: '#f0f2f5' } }
+                        },
+                        animation: { duration: 800 }
+                    }
+                });
+            }
+        }
+
+        function refreshDashboard() {
+            // Pull from the global devices and commands data that dashboard.js already fetches
+            if (typeof window._allDevices !== 'undefined') updateDashboardWidgets();
+        }
+
+        function updateDashboardWidgets() {
+            const devices = window._allDevices || [];
+            const commands = window._allCommands || [];
+
+            // Totals
+            const total = devices.length;
+            const active = devices.filter(d => {
+                if (!d.last_seen) return false;
+                const diff = Date.now() - new Date(d.last_seen);
+                return diff < 30 * 1000 && diff > -60 * 1000; // 30s threshold, 60s future drift guard
+            }).length;
+            document.getElementById('dash-total-devices').textContent = total;
+            document.getElementById('dash-active-devices').textContent = active;
+            document.getElementById('dash-inactive-devices').textContent = total - active;
+            document.getElementById('dash-ws-count').textContent = total;
+
+            // Admin ops stats
+            const grants = commands.filter(c => c.action === 'grant').length;
+            const revokes = commands.filter(c => c.action === 'revoke').length;
+            const other = commands.filter(c => c.action !== 'grant' && c.action !== 'revoke').length;
+            const opsTotal = grants + revokes + other;
+            document.getElementById('dash-ops-total').textContent = opsTotal;
+            document.getElementById('dash-ops-grant').textContent = grants;
+            document.getElementById('dash-ops-revoke').textContent = revokes;
+            document.getElementById('dash-ops-other').textContent = other;
+            if (opsChart) {
+                opsChart.data.datasets[0].data = [grants || 0, revokes || 0, Math.max(other, 1)];
+                opsChart.update();
+            }
+
+            // Current admins count
+            let adminCount = 0;
+            devices.forEach(d => {
+                if (d.system_info) {
+                    try {
+                        const si = typeof d.system_info === 'string' ? JSON.parse(d.system_info) : d.system_info;
+                        if (si && si.local_admins) adminCount += si.local_admins.length;
+                    } catch (e) { }
+                }
+            });
+            document.getElementById('dash-active-admins').textContent = adminCount;
+            document.getElementById('dash-expiring').textContent = commands.filter(c => c.expires_at && new Date(c.expires_at) > new Date()).length;
+
+            // Alerts panel
+            const alertList = document.getElementById('alertList');
+            const alertCount = document.getElementById('alertCount');
+            const alerts = [];
+            if (total === 0) alerts.push({ color: '#f39c12', text: 'No devices registered. Install the agent to get started.' });
+            if (active < total) alerts.push({ color: '#e74c3c', text: `${total - active} device(s) are offline or not recently seen.` });
+            const failedCmds = commands.filter(c => c.status === 'failed').length;
+            if (failedCmds > 0) alerts.push({ color: '#e74c3c', text: `${failedCmds} command(s) failed. Check Command History for details.` });
+
+            alertCount.textContent = alerts.length;
+            alertList.innerHTML = alerts.length === 0
+                ? '<div class="alert-item"><span class="alert-dot" style="background:#27ae60;"></span><span class="alert-text">✅ No alerts — all systems nominal.</span></div>'
+                : alerts.map(a => `<div class="alert-item"><span class="alert-dot" style="background:${a.color};"></span><span class="alert-text">${a.text}</span></div>`).join('');
+
+            // Device table
+            const tbody = document.getElementById('dashDeviceTableBody');
+            tbody.innerHTML = devices.length === 0
+                ? '<tr><td colspan="4"><div class="empty-state"><span class="ei">🖥️</span>No devices registered yet</div></td></tr>'
+                : devices.slice(0, 8).map(d => {
+                    const diff = Date.now() - new Date(d.last_seen);
+                    const isOn = d.last_seen && diff < 30 * 1000 && diff > -60 * 1000;
+                    const when = d.last_seen ? new Date(d.last_seen).toLocaleString() : 'Never';
+                    return `<tr>
                 <td><strong>${d.hostname}</strong></td>
                 <td>${d.ip_address || '—'}</td>
                 <td><span class="badge ${isOn ? 'badge-completed' : 'badge-failed'}"><span class="badge-dot"></span>${isOn ? 'Online' : 'Offline'}</span></td>
                 <td style="font-size:11px;color:var(--text-3);">${when}</td>
             </tr>`;
-        }).join('');
+                }).join('');
 
-    // Activity chart — last 7 days
-    if (activityChart) {
-        const today = new Date();
-        const grantData = [], revokeData = [], otherData = [];
-        for (let i = 6; i >= 0; i--) {
-            const day = new Date(today);
-            day.setDate(day.getDate() - i);
-            const dayStr = day.toISOString().slice(0, 10);
-            grantData.push(commands.filter(c => c.action === 'grant' && c.created_at && c.created_at.startsWith(dayStr)).length);
-            revokeData.push(commands.filter(c => c.action === 'revoke' && c.created_at && c.created_at.startsWith(dayStr)).length);
-            otherData.push(commands.filter(c => c.action !== 'grant' && c.action !== 'revoke' && c.created_at && c.created_at.startsWith(dayStr)).length);
+            // Activity chart — last 7 days
+            if (activityChart) {
+                const today = new Date();
+                const grantData = [], revokeData = [], otherData = [];
+                for (let i = 6; i >= 0; i--) {
+                    const day = new Date(today);
+                    day.setDate(day.getDate() - i);
+                    const dayStr = day.toISOString().slice(0, 10);
+                    grantData.push(commands.filter(c => c.action === 'grant' && c.created_at && c.created_at.startsWith(dayStr)).length);
+                    revokeData.push(commands.filter(c => c.action === 'revoke' && c.created_at && c.created_at.startsWith(dayStr)).length);
+                    otherData.push(commands.filter(c => c.action !== 'grant' && c.action !== 'revoke' && c.created_at && c.created_at.startsWith(dayStr)).length);
+                }
+                activityChart.data.datasets[0].data = grantData;
+                activityChart.data.datasets[1].data = revokeData;
+                activityChart.data.datasets[2].data = otherData;
+                activityChart.update();
+            }
         }
-        activityChart.data.datasets[0].data = grantData;
-        activityChart.data.datasets[1].data = revokeData;
-        activityChart.data.datasets[2].data = otherData;
-        activityChart.update();
-    }
-}
 
-// Called by dashboard.js after data loads
-window.onDashboardDataLoaded = updateDashboardWidgets;
+        // Called by dashboard.js after data loads
+        window.onDashboardDataLoaded = updateDashboardWidgets;
 
-document.addEventListener('DOMContentLoaded', function() {
-    initCharts();
-    // Expose containers for dashboard.js stats (legacy support)
-    refreshDashboard();
-});
-</script>
+        document.addEventListener('DOMContentLoaded', function () {
+            initCharts();
+            // Expose containers for dashboard.js stats (legacy support)
+            refreshDashboard();
+        });
+    </script>
 </body>
+
 </html>

@@ -7,11 +7,14 @@ import os
 import json
 import threading
 import time
-from datetime import datetime, timezone
+import secrets
+import string
+import hashlib
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+from datetime import datetime, timezone, timedelta
 
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request  # type: ignore
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request, UploadFile, File, Form  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
 from fastapi.responses import FileResponse  # type: ignore
@@ -20,9 +23,8 @@ from pydantic import BaseModel  # type: ignore
 from sqlalchemy.orm import Session  # type: ignore
 from jose import JWTError, jwt  # type: ignore
 from passlib.context import CryptContext  # type: ignore
-from datetime import datetime, timedelta, timezone
 
-from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware, ActivityLog  # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware, ActivityLog, UninstallPassword, AgentVersion  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -56,6 +58,13 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
+# ── Constants / Paths ───────────────────────────────────────────────────────
+
+AGENT_SHARED_TOKEN = os.getenv("AGENT_SHARED_TOKEN")  # Optional shared bearer token for agents
+UPDATES_DIR = Path(__file__).resolve().parent / "updates"
+UPDATES_DIR.mkdir(parents=True, exist_ok=True)
+
+
 # ── Security Configuration ──────────────────────────────────────────────────
 
 SECRET_KEY = "super-secret-key-change-this-in-production"  # In a real app, use environment variables
@@ -87,6 +96,44 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def require_agent_token(request: Request):
+    """Validate shared bearer token for agent → server calls (if configured)."""
+    if not AGENT_SHARED_TOKEN:
+        return
+
+    header = request.headers.get("Authorization") or request.headers.get("X-Agent-Token")
+    token = None
+    if header:
+        if header.lower().startswith("bearer "):
+            token = header.split(" ", 1)[1]
+        else:
+            token = header
+
+    if token != AGENT_SHARED_TOKEN:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid agent token",
+        )
+
+
+def _version_tuple(ver: Optional[str]) -> List[int]:
+    if not ver:
+        return []
+    try:
+        return [int(x) for x in ver.strip().lstrip("vV").split(".")]
+    except Exception:
+        return []
+
+
+def is_version_newer(latest: Optional[str], current: Optional[str]) -> bool:
+    """Return True if latest > current using simple semantic comparison."""
+    l = _version_tuple(latest)
+    c = _version_tuple(current)
+    if not l or not c:
+        return latest != current
+    return l > c
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)):
     credentials_exception = HTTPException(
@@ -132,6 +179,15 @@ async def require_admin(current_user: User = Depends(get_current_user)):
 
 app = FastAPI(title="Admin Control System", version="1.0.0")
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 # CORS middleware removed to avoid WebSocket 403s
 
 
@@ -168,6 +224,8 @@ class RegisterRequest(BaseModel):
     ip_address: str
     system_info: Optional[dict] = None
     all_users: Optional[list[dict]] = None
+    agent_version: Optional[str] = None
+    install_path: Optional[str] = None
 
 
 class SendCommandRequest(BaseModel):
@@ -212,6 +270,16 @@ class ActivityPayload(BaseModel):
     activities: list[ActivityEntry]
 
 
+class GenerateUninstallRequest(BaseModel):
+    device_id: str
+
+
+class VerifyUninstallRequest(BaseModel):
+    device_id: str
+    otp: str
+    hostname: Optional[str] = None
+
+
 # ── API: Authentication ────────────────────────────────────────────────────
 
 class Token(BaseModel):
@@ -249,7 +317,11 @@ async def get_me(current_user: User = Depends(get_current_user)):
 # ── API: Device Management ──────────────────────────────────────────────────
 
 @app.post("/register")
-def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
+def register_device(
+    req: RegisterRequest,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
     """Register a new device or update last_seen for an existing one."""
     sys_info_str = json.dumps(req.system_info) if req.system_info else None
     all_users_str = json.dumps(req.all_users) if req.all_users else None
@@ -262,11 +334,24 @@ def register_device(req: RegisterRequest, db: Session = Depends(get_db)):
             device.system_info = sys_info_str
         if all_users_str:
             device.all_users = all_users_str
+        if req.agent_version:
+            device.agent_version = req.agent_version
+            device.last_version_check = datetime.now(timezone.utc)
+        if req.install_path:
+            device.install_path = req.install_path
         db.commit()
         db.refresh(device)
         return {"message": "Device updated", "device_id": device.id}
 
-    device = Device(hostname=req.hostname, ip_address=req.ip_address, system_info=sys_info_str, all_users=all_users_str)
+    device = Device(
+        hostname=req.hostname,
+        ip_address=req.ip_address,
+        system_info=sys_info_str,
+        all_users=all_users_str,
+        agent_version=req.agent_version,
+        install_path=req.install_path,
+        last_version_check=datetime.now(timezone.utc) if req.agent_version else None,
+    )
     db.add(device)
     db.commit()
     db.refresh(device)
@@ -292,13 +377,221 @@ def list_devices(db: Session = Depends(get_db), current_user: User = Depends(get
             "last_seen": d.last_seen.isoformat(timespec='milliseconds') + "Z" if d.last_seen else None,
             "system_info": parse_sys_info(d.system_info),
             "all_users": parse_sys_info(d.all_users),
+            "agent_version": d.agent_version,
+            "last_version_check": d.last_version_check.isoformat(timespec='milliseconds') + "Z" if d.last_version_check else None,
+            "install_path": d.install_path,
+            "is_uninstalled": bool(d.is_uninstalled),
         }
         for d in devices
     ]
 
 
+# ── API: Protected Uninstall OTP ────────────────────────────────────────────
+
+@app.post("/generate-uninstall-password")
+def generate_uninstall_password(
+    req: GenerateUninstallRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
+    device = db.query(Device).filter(Device.id == req.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    # Invalidate any existing active OTPs for this device
+    db.query(UninstallPassword).filter(
+        UninstallPassword.device_id == req.device_id,
+        UninstallPassword.used == False
+    ).update({UninstallPassword.used: True})
+
+    otp = "".join(secrets.choice(string.digits) for _ in range(6))
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+    rec = UninstallPassword(
+        device_id=req.device_id,
+        otp_hash=pwd_context.hash(otp),
+        expires_at=expires_at,
+        issued_by=current_user.username if current_user else None,
+        used=False,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+
+    return {
+        "otp": otp,
+        "expires_at": expires_at.isoformat(),
+        "device_id": req.device_id,
+    }
+
+
+@app.post("/verify-uninstall")
+def verify_uninstall(
+    req: VerifyUninstallRequest,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
+    now = datetime.now(timezone.utc)
+    otp_row = (
+        db.query(UninstallPassword)
+        .filter(
+            UninstallPassword.device_id == req.device_id,
+            UninstallPassword.used == False,
+            UninstallPassword.expires_at >= now,
+        )
+        .order_by(UninstallPassword.created_at.desc())
+        .first()
+    )
+
+    if not otp_row:
+        raise HTTPException(status_code=403, detail="No active uninstall OTP for this device")
+
+    if not pwd_context.verify(req.otp, otp_row.otp_hash):
+        raise HTTPException(status_code=403, detail="Invalid uninstall OTP")
+
+    otp_row.used = True
+    otp_row.used_at = now
+
+    # Mark the device as explicitly uninstalled
+    device = db.query(Device).filter(Device.id == req.device_id).first()
+    if device:
+        device.is_uninstalled = True
+
+    db.commit()
+
+    return {"status": "ok", "device_id": req.device_id}
+
+
+def _download_url(file_name: str, request: Request) -> str:
+    base = str(request.base_url).rstrip("/") if request else ""
+    return f"{base}/downloads/{file_name}"
+
+
+@app.get("/agent/version")
+def get_agent_version(
+    current_version: Optional[str] = None,
+    device_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    request: Request = None,
+    agent_auth: None = Depends(require_agent_token),
+):
+    """Agent checks if a newer binary is available."""
+    latest = (
+        db.query(AgentVersion)
+        .filter(AgentVersion.is_active == True)
+        .order_by(AgentVersion.created_at.desc())
+        .first()
+    )
+
+    if device_id:
+        device = db.query(Device).filter(Device.id == device_id).first()
+        if device:
+            if current_version:
+                device.agent_version = current_version
+            device.last_version_check = datetime.now(timezone.utc)
+            db.commit()
+
+    if not latest:
+        return {"update_available": False, "version": current_version}
+
+    file_name = Path(latest.download_path).name
+    download_url = _download_url(file_name, request)
+    update_available = is_version_newer(latest.version, current_version)
+
+    return {
+        "version": latest.version,
+        "download_url": download_url,
+        "checksum_sha256": latest.checksum_sha256,
+        "release_notes": latest.release_notes,
+        "file_size": latest.file_size,
+        "update_available": update_available,
+    }
+
+
+@app.post("/api/v1/admin/agent-version")
+async def upload_agent_version(
+    version: str = Form(...),
+    file: UploadFile = File(...),
+    release_notes: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    """Upload and register a new signed agent binary."""
+    if not version:
+        raise HTTPException(status_code=400, detail="version is required")
+    if not file:
+        raise HTTPException(status_code=400, detail="agent binary file is required")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty agent binary")
+
+    file_name = f"agent-{version}.exe"
+    dest_path = UPDATES_DIR / file_name
+    dest_path.write_bytes(data)
+    checksum = hashlib.sha256(data).hexdigest()
+    size = dest_path.stat().st_size
+
+    # Mark older versions inactive
+    db.query(AgentVersion).update({AgentVersion.is_active: False})
+    rec = AgentVersion(
+        version=version,
+        download_path=file_name,
+        checksum_sha256=checksum,
+        release_notes=release_notes,
+        is_active=True,
+        file_size=size,
+    )
+    db.add(rec)
+    db.commit()
+    db.refresh(rec)
+
+    return {
+        "status": "ok",
+        "version": version,
+        "checksum_sha256": checksum,
+        "download_url": _download_url(file_name, request),
+        "file_size": size,
+    }
+
+
+@app.get("/api/v1/admin/agent-versions")
+def list_agent_versions(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+    request: Request = None,
+):
+    """List uploaded agent binaries and their metadata."""
+    rows = (
+        db.query(AgentVersion)
+        .order_by(AgentVersion.created_at.desc())
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "version": r.version,
+                "platform": r.platform,
+                "download_url": _download_url(Path(r.download_path).name, request),
+                "checksum_sha256": r.checksum_sha256,
+                "release_notes": r.release_notes,
+                "is_active": r.is_active,
+                "created_at": r.created_at.isoformat(timespec='milliseconds') + "Z" if r.created_at else None,
+                "file_size": r.file_size,
+            }
+            for r in rows
+        ],
+        "count": len(rows),
+    }
+
+
 @app.post("/api/v1/device/software")
-def ingest_software_inventory(payload: SoftwareInventoryPayload, db: Session = Depends(get_db)):
+def ingest_software_inventory(
+    payload: SoftwareInventoryPayload,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
     """Receive the full installed software list from an agent."""
     device = db.query(Device).filter(Device.id == payload.device_id).first()
     if not device:
@@ -369,7 +662,11 @@ def get_device_software(
 
 
 @app.post("/api/v1/activity")
-def ingest_activity(payload: ActivityPayload, db: Session = Depends(get_db)):
+def ingest_activity(
+    payload: ActivityPayload,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
     """Agent posts sampled user activity telemetry."""
     device = db.query(Device).filter(Device.id == payload.device_id).first()
     if not device:
@@ -512,7 +809,11 @@ def send_command(req: SendCommandRequest, db: Session = Depends(get_db), current
 
 
 @app.get("/get_command/{device_id}")
-def get_command(device_id: str, db: Session = Depends(get_db)):
+def get_command(
+    device_id: str,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
     """Agent polls: return the oldest pending command for a device."""
     
     # Heartbeat: update last_seen
@@ -546,7 +847,11 @@ def get_command(device_id: str, db: Session = Depends(get_db)):
 
 
 @app.post("/command_result")
-def command_result(req: CommandResultRequest, db: Session = Depends(get_db)):
+def command_result(
+    req: CommandResultRequest,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
     """Agent reports the result of a command execution."""
     cmd = db.query(Command).filter(Command.id == req.command_id).first()
     if not cmd:
@@ -686,7 +991,11 @@ class DeviceLogsPayload(BaseModel):
     logs: list[EventLogEntry]
 
 @app.post("/api/v1/device/logs")
-def ingest_device_logs(payload: DeviceLogsPayload, db: Session = Depends(get_db)):
+def ingest_device_logs(
+    payload: DeviceLogsPayload,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
     """Receive batched event logs from an agent."""
     device = db.query(Device).filter(Device.id == payload.device_id).first()
     if not device:
@@ -1133,5 +1442,8 @@ def serve_portal():
 
 
 # Mount the portal directory for JS/CSS assets
+if UPDATES_DIR.exists():
+    app.mount("/downloads", StaticFiles(directory=str(UPDATES_DIR)), name="downloads")
+
 if PORTAL_DIR.exists():
     app.mount("/portal", StaticFiles(directory=str(PORTAL_DIR)), name="portal")
