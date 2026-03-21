@@ -1,6 +1,6 @@
 [Setup]
 AppName=YourAgent Endpoint
-AppVersion=1.1.8
+AppVersion=1.1.19
 AppPublisher=Chimera IT
 DefaultDirName={pf}\YourAgent
 DefaultGroupName=YourAgent

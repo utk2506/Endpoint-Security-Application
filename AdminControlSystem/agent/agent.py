@@ -87,7 +87,7 @@ def is_admin():
 
 # ── Configuration ───────────────────────────────────────────────────────────
 
-AGENT_VERSION = "1.1.18"
+AGENT_VERSION = "1.1.19"
 SERVICE_NAME = "YourAgent"
 DEFAULT_INSTALL_DIR = r"C:\\Program Files\\YourAgent"
 STATE_FILE = "agent_state.json"
@@ -2099,11 +2099,29 @@ def main():
     print(f'║  Dry-run:   {"Yes" if dry_run else "No":<37}║')
     print('╚══════════════════════════════════════════════════╝')
     print(f"[*] Agent started. PID: {os.getpid()}")
+    
+    def ensure_tray_autostart(server_url):
+        import winreg
+        try:
+            exe_path = sys.executable
+            if 'python' in exe_path.lower():
+                cmd = f'"{exe_path}" "{os.path.abspath(__file__)}" --tray --server={server_url} --no-verify-ssl'
+            else:
+                cmd = f'"{exe_path}" --tray --server={server_url} --no-verify-ssl'
+            key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_ALL_ACCESS)
+            winreg.SetValueEx(key, "YourAgentTray", 0, winreg.REG_SZ, cmd)
+            winreg.CloseKey(key)
+            log('INFO', '✓ Tray autostart registry key ensured in HKLM.')
+        except Exception as e:
+            log('WARN', f'Could not ensure tray autostart in HKLM: {e}')
+
     try:
         import ctypes
         session_id = ctypes.c_uint32()
         if WINDLL and WINDLL.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session_id)):
              log('INFO', f"Agent Session ID: {session_id.value}")
+             if session_id.value == 0 and not dry_run and not getattr(args, 'tray', False):
+                 ensure_tray_autostart(server)
     except:
         pass
     log('INFO', f"Agent PID: {os.getpid()}")
