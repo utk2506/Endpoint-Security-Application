@@ -654,10 +654,18 @@ def schedule_binary_swap(staged_path: Path, service_name: str):
     backup = target.with_name(f"{target.stem}_old_{int(time.time())}{target.suffix}")
     helper = staged_path.with_suffix(".ps1")
     
+    lock_file = target.parent / SWAP_LOCK_FILE
+    try:
+        lock_file.touch()
+    except Exception:
+        pass
+
     script = rf"""
 $ErrorActionPreference = 'SilentlyContinue'
 $source = '{staged_path}'
 $target = '{target}'
+$backup = '{backup}'
+$lock = '{lock_file}'
 $backup = '{backup}'
 $service = '{service_name}'
 $procName = [System.IO.Path]::GetFileNameWithoutExtension($target)
@@ -700,6 +708,7 @@ if ($copied) {{
     }}
 }}
 
+Remove-Item $lock -Force -ErrorAction SilentlyContinue
 Remove-Item $source -Force -ErrorAction SilentlyContinue
 Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 """
