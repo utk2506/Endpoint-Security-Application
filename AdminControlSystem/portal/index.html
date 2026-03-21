@@ -917,8 +917,6 @@
                                     <option value="10">10 per page</option>
                                     <option value="20" selected>20 per page</option>
                                     <option value="50">50 per page</option>
-                                </select>
-                            </div>
                             <div style="display:flex;gap:6px;align-items:center;">
                                 <button class="btn btn-outline btn-sm" id="btnEvtPrevPage" onclick="changeEventPage(-1)"
                                     disabled>← Prev</button>
@@ -935,6 +933,7 @@
                 </div>
             </div>
 
+
             <!-- ──────────────── ACTIVITY VIEW ──────────────── -->
             <div class="view" id="view-activity">
                 <div class="page-header">
@@ -946,6 +945,12 @@
                         <label>Device</label>
                         <select id="activityDevice">
                             <option value="">All devices</option>
+                        </select>
+                    </div>
+                    <div class="form-field" style="margin:0;">
+                        <label>Username</label>
+                        <select id="activityUser">
+                            <option value="">All users</option>
                         </select>
                     </div>
                     <div class="form-field" style="margin:0;">
@@ -961,8 +966,9 @@
                         <label>To (UTC)</label>
                         <input id="activityTo" type="datetime-local">
                     </div>
-                    <div style="display:flex; align-items:flex-end;">
+                    <div style="display:flex; align-items:flex-end; gap:8px;">
                         <button class="btn btn-primary" onclick="loadActivity(1)">Apply</button>
+                        <button class="btn btn-outline" onclick="exportActivityCSV()" title="Export current stream to CSV">⬇ CSV</button>
                     </div>
                 </div>
 
@@ -1007,10 +1013,81 @@
                     </div>
                 </div>
 
+                <!-- ── Device-Wise Activity Summary ── -->
+                <div class="widget" style="margin-bottom:16px;">
+                    <div class="widget-header">
+                        <span class="widget-title">🖥️ Device-Wise Activity Summary</span>
+                        <span id="deviceSummaryCount" class="muted-pill">—</span>
+                    </div>
+                    <div class="widget-body" style="padding:0;">
+                        <div class="table-wrap" style="border:none;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Device</th>
+                                        <th>Active Time</th>
+                                        <th>Idle Time</th>
+                                        <th>Users Seen</th>
+                                        <th>Top App</th>
+                                        <th>Clicks / Keys</th>
+                                        <th>Risk Score</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="deviceSummaryBody">
+                                    <tr><td colspan="7"><div class="empty-state">Loading…</div></td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Hourly Activity Heatmap ── -->
+                <div class="widget" style="margin-bottom:16px;">
+                    <div class="widget-header">
+                        <span class="widget-title">🕒 Hourly Activity Heatmap (Last 24h)</span>
+                        <small id="heatmapDeviceLabel" style="color:var(--text-3);"></small>
+                    </div>
+                    <div class="widget-body" style="padding:16px 20px;">
+                        <div id="hourlyHeatmap" style="display:grid; grid-template-columns: repeat(24,1fr); gap:4px;"></div>
+                        <div style="display:flex; gap:16px; margin-top:10px; font-size:11px; color:var(--text-3);">
+                            <span style="display:flex; align-items:center; gap:4px;"><span style="width:12px;height:12px;border-radius:2px;background:#27ae60;display:inline-block;"></span>Active</span>
+                            <span style="display:flex; align-items:center; gap:4px;"><span style="width:12px;height:12px;border-radius:2px;background:#f39c12;display:inline-block;"></span>Mixed</span>
+                            <span style="display:flex; align-items:center; gap:4px;"><span style="width:12px;height:12px;border-radius:2px;background:#ecf0f1;display:inline-block;"></span>Idle / No data</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Per-User Summary ── -->
+                <div class="widget" style="margin-bottom:16px;">
+                    <div class="widget-header">
+                        <span class="widget-title">👤 Per-User Activity Summary</span>
+                        <span id="userSummaryCount" class="muted-pill">—</span>
+                    </div>
+                    <div class="widget-body" style="padding:0;">
+                        <div class="table-wrap" style="border:none;">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Username</th>
+                                        <th>Active Time</th>
+                                        <th>Idle Time</th>
+                                        <th>Clicks</th>
+                                        <th>Keypresses</th>
+                                        <th>Top Apps</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="userSummaryBody">
+                                    <tr><td colspan="6"><div class="empty-state">Loading…</div></td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Detailed Breakdown Row -->
                 <div class="widget" style="margin-bottom:16px;">
                     <div class="widget-header">
-                        <span class="widget-title">🔍 Detailed Application & Window Breakdown</span>
+                        <span class="widget-title">🔍 Detailed Application &amp; Window Breakdown</span>
                     </div>
                     <div class="widget-body">
                         <div class="table-wrap" style="border:none;">
@@ -1043,16 +1120,17 @@
                                 <thead>
                                     <tr>
                                         <th style="width:180px;">Time (UTC)</th>
-                                        <th style="width:170px;">Device</th>
+                                        <th style="width:140px;">Device</th>
+                                        <th style="width:110px;">User</th>
                                         <th>Window Title</th>
-                                        <th style="width:160px;">Process</th>
-                                        <th style="width:90px;">Idle</th>
-                                        <th style="width:90px;">Input</th>
+                                        <th style="width:150px;">Process</th>
+                                        <th style="width:80px;">Idle</th>
+                                        <th style="width:80px;">Input</th>
                                     </tr>
                                 </thead>
                                 <tbody id="activityTableBody">
                                     <tr>
-                                        <td colspan="6">
+                                        <td colspan="7">
                                             <div class="empty-state"><span class="ei">⏳</span>Loading…</div>
                                         </td>
                                     </tr>
@@ -1205,6 +1283,10 @@
 
             if (id === 'activity') {
                 loadActivity();
+                loadActivityUsers();
+                loadDeviceSummary();
+                loadHourlyHeatmap();
+                loadUserSummary();
             }
             if (id === 'maintenance') {
                 if (typeof loadAgentVersions === 'function') loadAgentVersions(true);

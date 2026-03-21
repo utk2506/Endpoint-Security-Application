@@ -1549,6 +1549,7 @@ async function loadActivity(page = 1) {
         activityPage = page;
         let url = `/api/v1/activity?page=${activityPage}&limit=${activityLimit}`;
         const device = $('activityDevice')?.value;
+        const username = $('activityUser')?.value;
         const search = $('activitySearch')?.value;
         const fromVal = $('activityFrom')?.value;
         const toVal = $('activityTo')?.value;
@@ -1560,6 +1561,7 @@ async function loadActivity(page = 1) {
         };
 
         if (device) url += `&device_id=${encodeURIComponent(device)}`;
+        if (username) url += `&username=${encodeURIComponent(username)}`;
         if (search) url += `&search=${encodeURIComponent(search)}`;
         const df = toIso(fromVal);
         const dt = toIso(toVal);
@@ -1568,6 +1570,7 @@ async function loadActivity(page = 1) {
 
         const data = await api('GET', url);
         const items = data.items || [];
+        _lastActivityItems = items; // cache for CSV export
         const total = data.total || 0;
 
         // ── Fetch Analytics Stats & Render Chart ──
@@ -1656,18 +1659,20 @@ async function loadActivity(page = 1) {
         if (!tbody) return;
 
         if (items.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><span class="ei">📭</span>No activity yet</div></td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><span class="ei">📭</span>No activity yet</div></td></tr>`;
         } else {
             tbody.innerHTML = items.map(i => {
                 const idle = formatIdle(i.idle_seconds);
-                const inputTxt = `${i.click_count || 0} clicks / ${i.keypress_count || 0} keys`;
+                const inputTxt = `${i.click_count || 0}c / ${i.keypress_count || 0}k`;
                 const deviceLabel = (() => {
                     const d = (_deviceCache || []).find(x => x.id === i.device_id);
                     return d ? d.hostname : (i.device_id || '');
                 })();
+                const userLabel = i.username ? escapeHtml(i.username) : '<span style="color:var(--text-3)">—</span>';
                 return `<tr>
                     <td>${formatDate(i.timestamp)}</td>
                     <td>${escapeHtml(deviceLabel)}</td>
+                    <td>${userLabel}</td>
                     <td>${escapeHtml(i.window_title || '—')}</td>
                     <td>${escapeHtml(i.process_name || '—')}</td>
                     <td>${idle}</td>
@@ -1697,7 +1702,7 @@ async function loadActivity(page = 1) {
         }
     } catch (err) {
         const tbody = $('activityTableBody');
-        if (tbody) tbody.innerHTML = `<tr><td colspan="6"><div class="empty-state"><span class="ei">⚠️</span>${err.message || 'Failed to load activity'}</div></td></tr>`;
+        if (tbody) tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><span class="ei">⚠️</span>${err.message || 'Failed to load activity'}</div></td></tr>`;
     }
 }
 
@@ -1708,7 +1713,162 @@ function activityNextPage() {
     if (activityPage < activityTotalPages) loadActivity(activityPage + 1);
 }
 
-// ── Utilities ──────────────────────────────────────────────────────────────
+// ── Load Activity User Filter Dropdown ───────────────────────────────────────
+async function loadActivityUsers() {
+    try {
+        const device = $('activityDevice')?.value;
+        let url = '/api/v1/activity/users';
+        if (device) url += `?device_id=${encodeURIComponent(device)}`;
+        const data = await api('GET', url);
+        const sel = $('activityUser');
+        if (!sel) return;
+        const current = sel.value;
+        sel.innerHTML = '<option value="">All users</option>';
+        (data.users || []).forEach(u => {
+            const opt = document.createElement('option');
+            opt.value = u;
+            opt.textContent = u;
+            sel.appendChild(opt);
+        });
+        if (current) sel.value = current;
+    } catch (e) {
+        console.warn('loadActivityUsers failed', e);
+    }
+}
+
+// ── Device-Wise Activity Summary ─────────────────────────────────────────────
+async function loadDeviceSummary() {
+    const tbody = $('deviceSummaryBody');
+    const countEl = $('deviceSummaryCount');
+    if (!tbody) return;
+    try {
+        const data = await api('GET', '/api/v1/activity/device-summary');
+        const devices = data.devices || [];
+        if (countEl) countEl.textContent = `${devices.length} device${devices.length !== 1 ? 's' : ''}`;
+        if (devices.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state">No device activity data</div></td></tr>';
+            return;
+        }
+        tbody.innerHTML = devices.map(d => {
+            const riskColor = d.risk_score >= 70 ? 'var(--danger)' : d.risk_score >= 40 ? 'var(--warning)' : 'var(--success)';
+            const users = d.users && d.users.length ? d.users.join(', ') : '—';
+            return `<tr>
+                <td><strong>${escapeHtml(d.hostname || d.device_id)}</strong></td>
+                <td><span class="badge badge-completed">${formatIdle(d.active_seconds)}</span></td>
+                <td><span style="color:var(--warning)">${formatIdle(d.idle_seconds)}</span></td>
+                <td title="${escapeHtml(users)}">${d.user_count} user${d.user_count !== 1 ? 's' : ''} <small style="color:var(--text-3);">(${escapeHtml(users.length > 40 ? users.slice(0,40)+'…' : users)})</small></td>
+                <td>${escapeHtml(d.top_app || '—')}</td>
+                <td>${d.total_clicks || 0} / ${d.total_keypresses || 0}</td>
+                <td><span style="font-weight:700; color:${riskColor}">${d.risk_score}</span>/100</td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state">Error loading device summary</div></td></tr>';
+    }
+}
+
+// ── Hourly Activity Heatmap ───────────────────────────────────────────────────
+async function loadHourlyHeatmap() {
+    const container = $('hourlyHeatmap');
+    const label = $('heatmapDeviceLabel');
+    if (!container) return;
+    try {
+        const device = $('activityDevice')?.value;
+        let url = '/api/v1/activity/hourly';
+        if (device) url += `?device_id=${encodeURIComponent(device)}`;
+        const username = $('activityUser')?.value;
+        if (username) url += (device ? '&' : '?') + `username=${encodeURIComponent(username)}`;
+
+        if (label) label.textContent = device ? `(device filtered)` : '(all devices)';
+
+        const data = await api('GET', url);
+        const buckets = data.hourly || [];
+        const maxActive = Math.max(...buckets.map(b => b.active_seconds), 1);
+
+        container.innerHTML = buckets.map(b => {
+            const ratio = b.active_seconds / maxActive;
+            const idleRatio = b.events > 0 ? (b.idle_seconds / (b.active_seconds + b.idle_seconds)) : 1;
+            let bg = '#ecf0f1';
+            if (b.events > 0) {
+                bg = idleRatio > 0.7 ? '#f39c12' : ratio > 0.6 ? '#27ae60' : ratio > 0.3 ? '#2ecc71' : '#f0faf3';
+            }
+            const tip = `Hour ${b.hour}:00 — Active: ${formatIdle(b.active_seconds)}, Idle: ${formatIdle(b.idle_seconds)}, Events: ${b.events}`;
+            return `<div title="${escapeHtml(tip)}" style="
+                background:${bg}; border-radius:4px; height:48px;
+                display:flex; flex-direction:column; align-items:center; justify-content:center;
+                font-size:10px; color:${b.events > 0 ? '#fff' : 'var(--text-3)'};
+                cursor:default; transition:transform 0.15s;
+            " onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform=''">
+                <span>${b.hour}h</span>
+            </div>`;
+        }).join('');
+    } catch (e) {
+        if (container) container.innerHTML = '<div style="color:var(--text-3); padding:10px;">Error loading heatmap</div>';
+    }
+}
+
+// ── Per-User Activity Summary ─────────────────────────────────────────────────
+async function loadUserSummary() {
+    const tbody = $('userSummaryBody');
+    const countEl = $('userSummaryCount');
+    if (!tbody) return;
+    try {
+        const device = $('activityDevice')?.value;
+        let url = '/api/v1/activity/summary';
+        if (device) url += `?device_id=${encodeURIComponent(device)}`;
+        const data = await api('GET', url);
+        const users = data.users || [];
+        if (countEl) countEl.textContent = `${users.length} user${users.length !== 1 ? 's' : ''}`;
+        if (users.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">No user activity data</div></td></tr>';
+            return;
+        }
+        tbody.innerHTML = users.map(u => {
+            const topApps = (u.top_apps || []).slice(0, 3).map(a => escapeHtml(a.process)).join(', ') || '—';
+            return `<tr>
+                <td><strong>👤 ${escapeHtml(u.username)}</strong></td>
+                <td><span class="badge badge-completed">${formatIdle(u.active_seconds)}</span></td>
+                <td><span style="color:var(--warning)">${formatIdle(u.idle_seconds)}</span></td>
+                <td>${u.total_clicks || 0}</td>
+                <td>${u.total_keypresses || 0}</td>
+                <td><small style="color:var(--text-3)">${topApps}</small></td>
+            </tr>`;
+        }).join('');
+    } catch (e) {
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">Error loading user summary</div></td></tr>';
+    }
+}
+
+// ── Export Activity CSV ───────────────────────────────────────────────────────
+let _lastActivityItems = [];
+function exportActivityCSV() {
+    if (!_lastActivityItems || _lastActivityItems.length === 0) {
+        toast('No activity data to export. Apply filters first.', 'info');
+        return;
+    }
+    const escCsv = v => {
+        if (v == null) return '';
+        const s = String(v);
+        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const cols = ['Timestamp', 'Device', 'Username', 'Window Title', 'Process', 'Idle (s)', 'Clicks', 'Keypresses'];
+    const rows = _lastActivityItems.map(i => [
+        i.timestamp, i.device_id, i.username, i.window_title, i.process_name,
+        i.idle_seconds, i.click_count, i.keypress_count
+    ].map(escCsv).join(','));
+    const csv = [cols.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `activity_export_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    toast(`Exported ${_lastActivityItems.length} rows to CSV`, 'success');
+}
+
 
 function formatDate(dateStr) {
     if (!dateStr) return '—';

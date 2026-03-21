@@ -705,6 +705,7 @@ def get_activity(
     page: int = 1,
     limit: int = 50,
     device_id: Optional[str] = None,
+    username: Optional[str] = None,
     search: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -718,23 +719,27 @@ def get_activity(
     query = db.query(ActivityLog)
     if device_id:
         query = query.filter(ActivityLog.device_id == device_id)
-
+    if username:
+        query = query.filter(ActivityLog.username == username)
     if search:
         pattern = f"%{search}%"
         query = query.filter(
             (ActivityLog.window_title.ilike(pattern)) |
             (ActivityLog.process_name.ilike(pattern))
         )
-
     if date_from:
         try:
             df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
             query = query.filter(ActivityLog.timestamp >= df)
         except Exception:
             pass
-
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp <= dt)
         except Exception:
             pass
+
     total = query.count()
     items = (
         query.order_by(ActivityLog.timestamp.desc())
@@ -763,61 +768,311 @@ def get_activity(
         ],
     }
 
+
 from sqlalchemy import func
+
+
+def _apply_activity_filters(query, device_id, username, date_from, date_to):
+    """Reusable helper to apply standard filters to an ActivityLog query."""
+    if device_id:
+        query = query.filter(ActivityLog.device_id == device_id)
+    if username:
+        query = query.filter(ActivityLog.username == username)
+    if date_from:
+        try:
+            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp >= df)
+        except Exception:
+            pass
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp <= dt)
+        except Exception:
+            pass
+    return query
+
+
+@app.get("/api/v1/activity/users")
+def get_activity_users(
+    device_id: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all unique usernames seen in activity logs (optionally filtered by device)."""
+    query = db.query(func.distinct(ActivityLog.username)).filter(ActivityLog.username != None)
+    if device_id:
+        query = query.filter(ActivityLog.device_id == device_id)
+    users = [row[0] for row in query.all() if row[0]]
+    return {"users": sorted(users), "count": len(users)}
+
 
 @app.get("/api/v1/activity/stats")
 def get_activity_stats(
     device_id: Optional[str] = None,
+    username: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Aggregate statistics for activity Pie Charts and layout summaries."""
+    """Aggregate statistics: idle/active split, app distribution, user distribution, risk score."""
     query = db.query(ActivityLog)
-    if device_id:
-        query = query.filter(ActivityLog.device_id == device_id)
-    if date_from:
-        try:
-            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp >= df)
-        except Exception: pass
-    if date_to:
-        try:
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp <= dt)
-        except Exception: pass
+    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
 
-    # Use database-level aggregation for efficiency on large "Enterprise" datasets
     all_logs = query.all()
     device_ids = set()
     total_idle = 0
-    apps = {}
-    users = {} # Track time per user
-    
+    apps: dict = {}
+    users: dict = {}
+    after_hours_active = 0
+    total_active = 0
+    input_bursts = 0
+
     for log_entry in all_logs:
         device_ids.add(log_entry.device_id)
-        # Cap idle time at 15s for this sample. 
         log_idle = min(15, log_entry.idle_seconds or 0)
         total_idle += log_idle
-        
-        # App time is the remaining time in this 15s slice
+
         proc = log_entry.process_name or "Unknown"
         uname = log_entry.username or "Unknown"
 
         if log_idle < 15:
             active_portion = 15 - log_idle
+            total_active += active_portion
             apps[proc] = apps.get(proc, 0) + active_portion
             users[uname] = users.get(uname, 0) + active_portion
+            # After hours: before 08:00 or after 20:00 local equivalent (UTC check)
+            if log_entry.timestamp:
+                hour = log_entry.timestamp.hour
+                if hour < 8 or hour >= 20:
+                    after_hours_active += active_portion
+
+        # Detect input burst (>50 keys or clicks in one 15s sample)
+        total_input = (log_entry.click_count or 0) + (log_entry.keypress_count or 0)
+        if total_input > 50:
+            input_bursts += 1
+
+    total_logged = len(all_logs)
+    # Risk score (0-100): weighted combo of after-hours ratio + burst ratio
+    after_hours_ratio = (after_hours_active / total_active) if total_active > 0 else 0
+    burst_ratio = (input_bursts / total_logged) if total_logged > 0 else 0
+    risk_score = min(100, int((after_hours_ratio * 60) + (burst_ratio * 40)))
 
     return {
         "total_idle_seconds": int(total_idle),
-        "total_duration_seconds": len(all_logs) * 15,
+        "total_active_seconds": int(total_active),
+        "total_duration_seconds": total_logged * 15,
         "device_count": len(device_ids),
         "process_distribution": apps,
-        "user_distribution": users
+        "user_distribution": users,
+        "after_hours_active_seconds": int(after_hours_active),
+        "risk_score": risk_score,
     }
 
+
+@app.get("/api/v1/activity/summary")
+def get_activity_summary(
+    device_id: Optional[str] = None,
+    username: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Per-user summary: active/idle time, top apps, interaction counts."""
+    query = db.query(ActivityLog)
+    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
+    all_logs = query.all()
+
+    # user_data: {username -> {active_s, idle_s, clicks, keys, apps: {proc: s}}}
+    user_data: dict = {}
+    for log_entry in all_logs:
+        uname = log_entry.username or "Unknown"
+        if uname not in user_data:
+            user_data[uname] = {
+                "username": uname,
+                "active_seconds": 0,
+                "idle_seconds": 0,
+                "total_clicks": 0,
+                "total_keypresses": 0,
+                "apps": {},
+            }
+        d = user_data[uname]
+        log_idle = min(15, log_entry.idle_seconds or 0)
+        active = 15 - log_idle
+        d["active_seconds"] += active
+        d["idle_seconds"] += log_idle
+        d["total_clicks"] += log_entry.click_count or 0
+        d["total_keypresses"] += log_entry.keypress_count or 0
+        proc = log_entry.process_name or "Unknown"
+        if active > 0:
+            d["apps"][proc] = d["apps"].get(proc, 0) + active
+
+    summaries = []
+    for d in user_data.values():
+        top_apps = sorted(d["apps"].items(), key=lambda x: x[1], reverse=True)[:5]
+        summaries.append({
+            "username": d["username"],
+            "active_seconds": d["active_seconds"],
+            "idle_seconds": d["idle_seconds"],
+            "total_clicks": d["total_clicks"],
+            "total_keypresses": d["total_keypresses"],
+            "top_apps": [{"process": p, "seconds": s} for p, s in top_apps],
+        })
+
+    summaries.sort(key=lambda x: x["active_seconds"], reverse=True)
+    return {"count": len(summaries), "users": summaries}
+
+
+@app.get("/api/v1/activity/top-apps")
+def get_top_apps(
+    device_id: Optional[str] = None,
+    username: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    limit: int = 10,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Top N applications by active time (seconds). Optionally scoped to device/user."""
+    query = db.query(ActivityLog)
+    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
+    all_logs = query.all()
+
+    apps: dict = {}
+    for log_entry in all_logs:
+        log_idle = min(15, log_entry.idle_seconds or 0)
+        active = 15 - log_idle
+        if active > 0:
+            proc = log_entry.process_name or "Unknown"
+            apps[proc] = apps.get(proc, 0) + active
+
+    sorted_apps = sorted(apps.items(), key=lambda x: x[1], reverse=True)[:max(1, limit)]
+    return {
+        "top_apps": [
+            {"process": p, "active_seconds": s, "active_minutes": round(s / 60, 1)}
+            for p, s in sorted_apps
+        ]
+    }
+
+
+@app.get("/api/v1/activity/hourly")
+def get_activity_hourly(
+    device_id: Optional[str] = None,
+    username: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hourly breakdown (hour 0-23) of active/idle seconds for heatmap visualisation."""
+    query = db.query(ActivityLog)
+    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
+    all_logs = query.all()
+
+    buckets = [{"hour": h, "active_seconds": 0, "idle_seconds": 0, "events": 0} for h in range(24)]
+    for log_entry in all_logs:
+        if not log_entry.timestamp:
+            continue
+        hour = log_entry.timestamp.hour
+        log_idle = min(15, log_entry.idle_seconds or 0)
+        buckets[hour]["idle_seconds"] += log_idle
+        buckets[hour]["active_seconds"] += (15 - log_idle)
+        buckets[hour]["events"] += 1
+
+    return {"hourly": buckets}
+
+
+@app.get("/api/v1/activity/device-summary")
+def get_device_activity_summary(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Device-wise activity summary: active/idle time, unique users, top app, risk score per device."""
+    query = db.query(ActivityLog)
+    if date_from:
+        try:
+            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp >= df)
+        except Exception:
+            pass
+    if date_to:
+        try:
+            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
+            query = query.filter(ActivityLog.timestamp <= dt)
+        except Exception:
+            pass
+
+    all_logs = query.all()
+
+    # device_data: {device_id -> {active_s, idle_s, users, apps, input_bursts, after_hours_active}}
+    device_data: dict = {}
+    for log_entry in all_logs:
+        did = log_entry.device_id
+        if did not in device_data:
+            device_data[did] = {
+                "device_id": did,
+                "active_seconds": 0,
+                "idle_seconds": 0,
+                "users": set(),
+                "apps": {},
+                "input_bursts": 0,
+                "after_hours_active": 0,
+                "total_clicks": 0,
+                "total_keypresses": 0,
+            }
+        d = device_data[did]
+        log_idle = min(15, log_entry.idle_seconds or 0)
+        active = 15 - log_idle
+        d["active_seconds"] += active
+        d["idle_seconds"] += log_idle
+        d["total_clicks"] += log_entry.click_count or 0
+        d["total_keypresses"] += log_entry.keypress_count or 0
+        if log_entry.username:
+            d["users"].add(log_entry.username)
+        if active > 0:
+            proc = log_entry.process_name or "Unknown"
+            d["apps"][proc] = d["apps"].get(proc, 0) + active
+            if log_entry.timestamp:
+                hour = log_entry.timestamp.hour
+                if hour < 8 or hour >= 20:
+                    d["after_hours_active"] += active
+        total_input = (log_entry.click_count or 0) + (log_entry.keypress_count or 0)
+        if total_input > 50:
+            d["input_bursts"] += 1
+
+    # Enrich with hostname and compute risk score
+    all_devices = {dev.id: dev.hostname for dev in db.query(Device).all()}
+
+    result = []
+    for did, d in device_data.items():
+        total_active = d["active_seconds"]
+        after_hours_ratio = (d["after_hours_active"] / total_active) if total_active > 0 else 0
+        total_events = (d["active_seconds"] + d["idle_seconds"]) // 15 or 1
+        burst_ratio = d["input_bursts"] / total_events
+        risk_score = min(100, int((after_hours_ratio * 60) + (burst_ratio * 40)))
+
+        top_app = max(d["apps"].items(), key=lambda x: x[1])[0] if d["apps"] else "—"
+        result.append({
+            "device_id": did,
+            "hostname": all_devices.get(did, did),
+            "active_seconds": d["active_seconds"],
+            "idle_seconds": d["idle_seconds"],
+            "active_minutes": round(d["active_seconds"] / 60, 1),
+            "user_count": len(d["users"]),
+            "users": sorted(d["users"]),
+            "top_app": top_app,
+            "total_clicks": d["total_clicks"],
+            "total_keypresses": d["total_keypresses"],
+            "after_hours_active_seconds": d["after_hours_active"],
+            "risk_score": risk_score,
+        })
+
+    result.sort(key=lambda x: x["active_seconds"], reverse=True)
+    return {"count": len(result), "devices": result}
 
 
 # ── API: Command Queue ─────────────────────────────────────────────────────
