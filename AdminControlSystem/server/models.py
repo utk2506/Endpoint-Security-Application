@@ -242,3 +242,4 @@ def _ensure_column(table: str, column: str, ddl: str):
 _ensure_column("devices", "agent_version", "VARCHAR(32)")
 _ensure_column("devices", "last_version_check", "DATETIME")
 _ensure_column("devices", "install_path", "VARCHAR(260)")
+_ensure_column("activity_logs", "username", "VARCHAR(255)")

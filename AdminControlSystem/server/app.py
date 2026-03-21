@@ -260,6 +260,7 @@ class ActivityEntry(BaseModel):
     timestamp: Optional[str] = None  # ISO-8601
     window_title: Optional[str] = None
     process_name: Optional[str] = None
+    username: Optional[str] = None
     idle_seconds: Optional[int] = 0
     click_count: Optional[int] = 0
     keypress_count: Optional[int] = 0
@@ -686,6 +687,7 @@ def ingest_activity(
                 timestamp=ts,
                 window_title=(entry.window_title or "")[:1024],
                 process_name=(entry.process_name or "")[:260],
+                username=(entry.username or "")[:255],
                 idle_seconds=entry.idle_seconds or 0,
                 click_count=entry.click_count or 0,
                 keypress_count=entry.keypress_count or 0,

@@ -11,11 +11,13 @@ curr.execute("PRAGMA table_info(activity_logs)")
 cols = [row[1] for row in curr.fetchall()]
 print(f"ActivityLog columns: {cols}")
 
-missing = ["idle_seconds", "click_count", "keypress_count"]
+missing = ["username", "idle_seconds", "click_count", "keypress_count"]
 for m in missing:
     if m not in cols:
         print(f"Adding missing column to activity_logs: {m}")
-        if m == "idle_seconds":
+        if m == "username":
+            curr.execute("ALTER TABLE activity_logs ADD COLUMN username VARCHAR(255)")
+        elif m == "idle_seconds":
             curr.execute("ALTER TABLE activity_logs ADD COLUMN idle_seconds INTEGER DEFAULT 0")
         elif m == "click_count":
             curr.execute("ALTER TABLE activity_logs ADD COLUMN click_count INTEGER DEFAULT 0")
