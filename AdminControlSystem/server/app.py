@@ -842,11 +842,15 @@ def get_activity_stats(
             total_active += active_portion
             apps[proc] = apps.get(proc, 0) + active_portion
             users[uname] = users.get(uname, 0) + active_portion
-            # After hours: before 08:00 or after 20:00 local equivalent (UTC check)
             if log_entry.timestamp:
-                hour = log_entry.timestamp.hour
-                if hour < 8 or hour >= 20:
-                    after_hours_active += active_portion
+                try:
+                    # Translate to local timezone for logical binning
+                    local_ts = log_entry.timestamp.replace(tzinfo=timezone.utc).astimezone()
+                    hour = local_ts.hour
+                    if hour < 8 or hour >= 20:
+                        after_hours_active += active_portion
+                except Exception:
+                    pass
 
         # Detect input burst (>50 keys or clicks in one 15s sample)
         total_input = (log_entry.click_count or 0) + (log_entry.keypress_count or 0)
@@ -975,7 +979,12 @@ def get_activity_hourly(
     for log_entry in all_logs:
         if not log_entry.timestamp:
             continue
-        hour = log_entry.timestamp.hour
+        try:
+            local_ts = log_entry.timestamp.replace(tzinfo=timezone.utc).astimezone()
+            hour = local_ts.hour
+        except Exception:
+            hour = log_entry.timestamp.hour
+
         log_idle = min(15, log_entry.idle_seconds or 0)
         buckets[hour]["idle_seconds"] += log_idle
         buckets[hour]["active_seconds"] += (15 - log_idle)
@@ -1037,9 +1046,13 @@ def get_device_activity_summary(
             proc = log_entry.process_name or "Unknown"
             d["apps"][proc] = d["apps"].get(proc, 0) + active
             if log_entry.timestamp:
-                hour = log_entry.timestamp.hour
-                if hour < 8 or hour >= 20:
-                    d["after_hours_active"] += active
+                try:
+                    local_ts = log_entry.timestamp.replace(tzinfo=timezone.utc).astimezone()
+                    hour = local_ts.hour
+                    if hour < 8 or hour >= 20:
+                        d["after_hours_active"] += active
+                except Exception:
+                    pass
         total_input = (log_entry.click_count or 0) + (log_entry.keypress_count or 0)
         if total_input > 50:
             d["input_bursts"] += 1
@@ -1605,14 +1618,19 @@ def _notification_scheduler_loop():
                     if elapsed_mins >= camp.interval_minutes:
                         should_fire = True
 
-                if should_fire:
+                    target_users_list = ["All"]
+                    try:
+                        target_users_list = json.loads(camp.target_users)
+                    except Exception:
+                        pass
+                        
                     cmd = Command(
                         device_id=camp.device_id,
                         action="notify",
                         username="system",
                         payload=json.dumps({
                             "message": camp.message,
-                            "target_users": json.loads(camp.target_users)
+                            "target_users": target_users_list
                         })
                     )
                     db.add(cmd)
@@ -1627,8 +1645,8 @@ def _notification_scheduler_loop():
                 EC.is_active = False
 
             db.commit()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[{datetime.now().isoformat()}] [_notification_scheduler_loop] Error: {e}")
         finally:
             db.close()
 
