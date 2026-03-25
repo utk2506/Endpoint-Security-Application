@@ -9,3 +9,4 @@ test_render.js
 *.log
 event_state.json
 agent_debug.log
+*.exe

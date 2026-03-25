@@ -16,12 +16,15 @@ if not exist nssm.exe (
 )
 
 echo [3/4] Compiling agent.py with PyInstaller...
-pyinstaller --clean --onefile --console --name agent --hidden-import winpty --hidden-import pywinpty --collect-all winpty --collect-all pywinpty agent.py
+pyinstaller --clean --onefile --console --distpath dist_sg\agent --name agent --add-data "assets;assets" --hidden-import winpty --hidden-import pywinpty --collect-all winpty --collect-all pywinpty agent.py
 
 echo [4/4] Compiling agentsetup.exe with Inno Setup...
 if exist "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" (
     "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" agentsetup.iss
-    echo Build complete! Installer is located in Output\agentsetup.exe
+    echo Copying standalone agent.exe for portal update stream...
+    if not exist Output_Safe mkdir Output_Safe
+    copy /Y "dist_sg\agent\agent.exe" "Output_Safe\agent.exe"
+    echo Build complete! Installer is in Output_Safe\SentraGuardSetup_New.exe and updater is in Output_Safe\agent.exe
 ) else (
     echo [!] Inno Setup ISCC.exe not found at default location.
     echo Please install Inno Setup 6 from https://jrsoftware.org/isinfo.php

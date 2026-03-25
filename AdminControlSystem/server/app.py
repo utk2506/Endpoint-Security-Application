@@ -4,6 +4,12 @@ FastAPI application serving REST API + static portal files.
 """
 
 import os
+import sys
+import asyncio
+
+if sys.platform == 'win32':
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import json
 import threading
 import time
@@ -132,7 +138,7 @@ def is_version_newer(latest: Optional[str], current: Optional[str]) -> bool:
     l = _version_tuple(latest)
     c = _version_tuple(current)
     if not l or not c:
-        return latest != current
+        return False  # can't compare versions; do not offer update for unknown current version
     return l > c
 
 async def get_current_user(request: Request, db: Session = Depends(get_db)):

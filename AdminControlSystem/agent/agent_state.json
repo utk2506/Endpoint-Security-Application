@@ -1,8 +1,4 @@
 {
-  "server": "https://localhost:8000",
-  "install_path": "C:\\Program Files\\YourAgent",
-  "hostname": "itsupport",
-  "device_id": "4fbeb576-2ba6-4f89-a809-3018e170d8ff",
-  "agent_version": "1.1.8",
-  "last_seen": "2026-03-20T12:32:29.388487Z"
+  "device_id": "test_device_1",
+  "server": "https://localhost:8000"
 }

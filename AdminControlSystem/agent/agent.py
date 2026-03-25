@@ -28,6 +28,15 @@ except ImportError:
         pass
 import subprocess
 import sys
+
+# Redirection setup for absolute diagnostics with Tray executables
+try:
+    if "--tray" in "".join(sys.argv):
+        sys.stdout = open(r"C:\Users\ITSupport\AppData\Local\Temp\agent_stdout.log", 'a', encoding='utf-8')
+        sys.stderr = open(r"C:\Users\ITSupport\AppData\Local\Temp\agent_stderr.log", 'a', encoding='utf-8')
+        print(f"--- NEW RUN WITH TRAY ARGS: {sys.argv} ---", flush=True)
+except Exception:
+    pass
 import time
 import threading
 import asyncio
@@ -49,6 +58,10 @@ import websockets  # type: ignore
 
 # Windows-specific creation flags (fallback to 0 for static analyzers / non-Win envs)
 CREATE_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+# Global scope initializers for tracking references across inner loops safely
+_console_win = None
+device_id = None
 DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0)
 CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
 CREATE_DEFAULT_ERROR_MODE = getattr(subprocess, "CREATE_DEFAULT_ERROR_MODE", 0)
@@ -87,15 +100,15 @@ def is_admin():
 
 # ── Configuration ───────────────────────────────────────────────────────────
 
-AGENT_VERSION = "1.1.19"
-SERVICE_NAME = "YourAgent"
-DEFAULT_INSTALL_DIR = r"C:\\Program Files\\YourAgent"
+AGENT_VERSION = "1.0.1"
+SERVICE_NAME = "SentraGuard"
+DEFAULT_INSTALL_DIR = r"C:\Program Files\SentraGuard"
 STATE_FILE = "agent_state.json"
 UPDATE_STAGING_DIR = "updates"
 SWAP_LOCK_FILE = "agent_swap.lock"
 NOTIFY_QUEUE_FILE = "notify_queue.json"
-UPDATE_MIN_INTERVAL = 5  # seconds (reduced for testing)
-UPDATE_MAX_INTERVAL = 10  # seconds (reduced for testing)
+UPDATE_MIN_INTERVAL = 900   # 15 minutes
+UPDATE_MAX_INTERVAL = 2700  # 45 minutes
 WATCHDOG_INTERVAL = 8      # seconds
 
 POLL_INTERVAL = 5  # seconds
@@ -648,12 +661,12 @@ def download_binary(url: str, dest_path: Path):
     return dest_path
 
 
-def schedule_binary_swap(staged_path: Path, service_name: str):
+def schedule_binary_swap(staged_path: Path, service_name: str, server_url: str | None = None):
     """Swap the current binary with the staged one via a detached PowerShell helper."""
     target = current_binary_path()
     backup = target.with_name(f"{target.stem}_old_{int(time.time())}{target.suffix}")
     helper = staged_path.with_suffix(".ps1")
-    
+    server_url = server_url or "https://localhost:8000"
     lock_file = target.parent / SWAP_LOCK_FILE
     try:
         lock_file.touch()
@@ -662,54 +675,216 @@ def schedule_binary_swap(staged_path: Path, service_name: str):
 
     script = rf"""
 $ErrorActionPreference = 'SilentlyContinue'
-$source = '{staged_path}'
-$target = '{target}'
-$backup = '{backup}'
-$lock = '{lock_file}'
-$backup = '{backup}'
-$service = '{service_name}'
+$source   = '{staged_path}'
+$target   = '{target}'
+$backup   = '{backup}'
+$lock     = '{lock_file}'
+$service  = '{service_name}'
+$server   = '{server_url}'
+$serviceNames = @($service) | Where-Object {{ $_ -and (Get-Service -Name $_ -ErrorAction SilentlyContinue) }}
 $procName = [System.IO.Path]::GetFileNameWithoutExtension($target)
+$log      = Join-Path (Split-Path $target) "agent_swap.log"
+$log2     = Join-Path "$env:ProgramData\\SentraGuard" "agent_swap.log"
+$log3     = Join-Path $env:TEMP "agent_swap.log"
+$root     = Split-Path $target
+$applyPs1 = Join-Path $root "apply_latest.ps1"
+$applyTask = "SentraGuard\\ApplyLatest"
+New-Item -ItemType Directory -Path (Split-Path $log) -Force -ErrorAction SilentlyContinue | Out-Null
+New-Item -ItemType Directory -Path (Split-Path $log2) -Force -ErrorAction SilentlyContinue | Out-Null
+New-Item -ItemType Directory -Path (Split-Path $log3) -Force -ErrorAction SilentlyContinue | Out-Null
+
+function Write-Log([string]$msg) {{
+    $ts = Get-Date -Format o
+    try {{ Add-Content -Path $log -Value "$ts`t$msg" -Encoding UTF8 }} catch {{}}
+    try {{ Add-Content -Path $log2 -Value "$ts`t$msg" -Encoding UTF8 }} catch {{}}
+    try {{ Add-Content -Path $log3 -Value "$ts`t$msg" -Encoding UTF8 }} catch {{}}
+}}
+
+Write-Log "Swap starting: source=$source target=$target"
 
 # Clean up ANY older backup files to save disk space
-Write-Output "Cleaning up previous backups..."
 Get-ChildItem (Split-Path $target) -Filter "$procName`_old_*" | ForEach-Object {{
     Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue
 }}
 
-# Stop service + any stray agent processes to release file locks
-Write-Output "Stopping service $service..."
-Stop-Service -Name $service -Force -ErrorAction SilentlyContinue
-Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force
-Get-Process -Name "$procName`_old_*" -ErrorAction SilentlyContinue | Stop-Process -Force
-
-Write-Output "Swapping binary..."
 $copied = $false
-for ($i = 0; $i -lt 10; $i++) {{
+$altTargets = @()
+try {{ $pf = $env:ProgramFiles; if ($pf) {{ $altTargets += (Join-Path $pf 'SentraGuard\\agent.exe') }} }} catch {{}}
+try {{ $pfx = ${{env:ProgramFiles(x86)}}; if ($pfx) {{ $altTargets += (Join-Path $pfx 'SentraGuard\\agent.exe') }} }} catch {{}}
+$altTargets = $altTargets | Select-Object -Unique
+$altTargets = $altTargets | Where-Object {{ $_ -and ($_ -ne $target) }}
+$ErrorActionPreference = 'Continue'  # ensure copy errors bubble into catch
+
+for ($i = 0; $i -lt 15; $i++) {{
+    # Ensure no process or service is locking the file on every attempt
+    foreach ($svc in $serviceNames) {{
+        Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue
+    }}
+    Get-Process -Name $procName -ErrorAction SilentlyContinue | Stop-Process -Force
+    Start-Sleep -Seconds 2
     try {{
-        Start-Sleep -Seconds 1
-        # Backup running binary
-        Copy-Item $target $backup -Force
-        # Place new binary
-        Copy-Item $source $target -Force
+        Copy-Item $target $backup -Force -ErrorAction Stop
+        Copy-Item $source $target -Force -ErrorAction Stop
+        foreach ($alt in $altTargets) {{
+            try {{
+                Copy-Item $source $alt -Force -ErrorAction Stop
+                Write-Log "Synced alt target: $alt"
+            }} catch {{
+                Write-Log "Failed to sync alt target $alt: $($_.Exception.Message)"
+            }}
+        }}
         $copied = $true
+        Write-Log "Swap succeeded on attempt $i"
         break
     }} catch {{
-        Start-Sleep -Seconds 1
+        Write-Log "Attempt $i failed: $($_.Exception.Message)"
     }}
 }}
 
+$ErrorActionPreference = 'SilentlyContinue'
+
 if ($copied) {{
-    Write-Output "Starting binary / service..."
-    if (Get-Service -Name $service -ErrorAction SilentlyContinue) {{
-        Start-Service -Name $service -ErrorAction SilentlyContinue
-    }} else {{
-        # Fallback to direct execution
-        Start-Process -FilePath $target
+    foreach ($svc in $serviceNames) {{
+        Start-Service -Name $svc -ErrorAction SilentlyContinue
     }}
+    if (-not $serviceNames) {{
+        Start-Process -FilePath $target
+        Write-Log "Started agent directly after swap"
+    }}
+    Write-Log "Service(s) restarted after swap: $($serviceNames -join ', ')"
+
+    # Ensure tray auto-start entry exists for all users
+    try {{
+        $runKey = 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run'
+        $trayCmd = '\"' + $target + '\" --tray --server=' + $server + ' --no-verify-ssl'
+        New-ItemProperty -Path $runKey -Name 'SentraGuardTray' -Value $trayCmd -PropertyType String -Force | Out-Null
+        Write-Log "Tray autostart key ensured in HKLM"
+    }} catch {{
+        Write-Log "Failed to set tray autostart key: $($_.Exception.Message)"
+    }}
+
+    # Best-effort start tray in current session (may be Session 0; harmless if hidden)
+    try {{
+        Start-Process -FilePath $target -ArgumentList "--tray --server=$server --no-verify-ssl" -WindowStyle Hidden
+        Write-Log "Tray process started after swap"
+    }} catch {{
+        Write-Log "Failed to start tray after swap: $($_.Exception.Message)"
+    }}
+
+    # Install/refresh a recurring scheduled task to re-apply the newest staged EXE
+    try {{
+        $applyBody = @'
+$latest = Get-ChildItem (Join-Path $root "updates\agent-*.exe") |
+  Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $latest) {{ exit 0 }}
+$targets = @($target)
+foreach ($t in $targets) {{
+  try {{ Copy-Item $latest.FullName $t -Force -ErrorAction Stop }} catch {{ }}
+}}
+Restart-Service SentraGuard -Force
+'@
+        Set-Content -Path $applyPs1 -Value $applyBody -Encoding UTF8 -Force
+        $start = (Get-Date).AddMinutes(1).ToString("HH:mm")
+        $createCmd = "schtasks /Create /F /RU SYSTEM /RL HIGHEST /TN `"$applyTask`" /TR `"powershell.exe -ExecutionPolicy Bypass -File `"$applyPs1`"`" /SC HOURLY /MO 1 /ST $start"
+        cmd.exe /c $createCmd | Out-Null
+        if ($LASTEXITCODE -ne 0) {{
+            Write-Log "Failed to create task $applyTask, exit $LASTEXITCODE"
+        }} else {{
+            cmd.exe /c "schtasks /Run /TN `"$applyTask`"" | Out-Null
+            Write-Log "Scheduled task $applyTask created and triggered (start $start)"
+        }}
+    }} catch {{
+        Write-Log "Failed to create/run scheduled task: $($_.Exception.Message)"
+    }}
+
+    # Register a PERMANENT logon-triggered scheduled task so tray restarts after login
+    try {{
+        $trayTaskName = "SentraGuardTray"
+        $trayXmlPath  = Join-Path $env:TEMP "SentraGuardTray.xml"
+        $trayXmlBody  = @"
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo><Description>SentraGuard tray icon launcher</Description></RegistrationInfo>
+  <Triggers><LogonTrigger><Enabled>true</Enabled></LogonTrigger></Triggers>
+  <Principals>
+    <Principal id="Author">
+      <GroupId>S-1-5-32-545</GroupId>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Enabled>true</Enabled>
+  </Settings>
+  <Actions>
+    <Exec>
+      <Command>"$target"</Command>
+      <Arguments>--tray --server=$server --no-verify-ssl</Arguments>
+    </Exec>
+  </Actions>
+</Task>
+"@
+        [System.IO.File]::WriteAllText($trayXmlPath, $trayXmlBody.Trim(), [System.Text.Encoding]::Unicode)
+        schtasks /Create /F /TN $trayTaskName /XML $trayXmlPath | Out-Null
+        Remove-Item $trayXmlPath -Force -ErrorAction SilentlyContinue
+        Write-Log "Permanent tray logon task registered: $trayTaskName"
+    }} catch {{
+        Write-Log "Failed to register permanent tray task: $($_.Exception.Message)"
+    }}
+
+    # Also register an apply-latest task so future manual portal-side swaps run automatically
+    try {{
+        $applyTaskName = "SentraGuardApplyLatest"
+        $applyScript   = Join-Path $root "apply_latest.ps1"
+        $applyBody = @'
+$ErrorActionPreference = "SilentlyContinue"
+$latest = Get-ChildItem (Join-Path $root "updates\agent-*.exe") |
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
+if (-not $latest) {{ exit 0 }}
+Stop-Service SentraGuard -Force
+Start-Sleep -Seconds 2
+taskkill /F /IM agent.exe 2>$null | Out-Null
+Start-Sleep -Seconds 2
+Copy-Item $latest.FullName $target -Force
+Start-Service SentraGuard
+'@
+        Set-Content -Path $applyScript -Value $applyBody -Encoding UTF8 -Force
+        schtasks /Create /F /TN $applyTaskName /TR "powershell.exe -ExecutionPolicy Bypass -File `"$applyScript`"" /SC ONSTART /RU SYSTEM /RL HIGHEST | Out-Null
+        Write-Log "Apply-latest task registered: $applyTaskName"
+    }} catch {{
+        Write-Log "Failed to register apply-latest task: $($_.Exception.Message)"
+    }}
+
+    # Immediately kick the tray in the active interactive user session (from Session 0)
+    try {{
+        $exp = Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($exp) {{
+            $owner = (Get-CimInstance Win32_Process -Filter "ProcessId=$($exp.Id)").GetOwner()
+            $user  = if ($owner.Domain) {{ "$($owner.Domain)\\$($owner.User)" }} else {{ $owner.User }}
+            $kickName = "SentraGuardTrayKick"
+            # schtasks only accepts HH:mm - add 2 minutes, then immediately Run the task
+            $kickTime = (Get-Date).AddMinutes(2).ToString("HH:mm")
+            $trayCmd  = "`"`"$target`"`" --tray --server=$server --no-verify-ssl"
+            schtasks /Create /F /TN $kickName /SC ONCE /ST $kickTime /TR $trayCmd /RU $user /IT /RL HIGHEST | Out-Null
+            Start-Sleep -Seconds 3
+            schtasks /Run /TN $kickName | Out-Null
+            Write-Log "Tray kick triggered for user: $user"
+        }} else {{
+            Write-Log "No explorer session; tray will appear at next login via SentraGuardTray task"
+        }}
+    }} catch {{
+        Write-Log "Failed to kick tray immediately: $($_.Exception.Message)"
+    }}
+
+    Remove-Item $source -Force -ErrorAction SilentlyContinue
+}} else {{
+    Write-Log "Swap failed after retries; keeping staged binary for retry"
 }}
 
 Remove-Item $lock -Force -ErrorAction SilentlyContinue
-Remove-Item $source -Force -ErrorAction SilentlyContinue
 Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 """
     try:
@@ -731,22 +906,56 @@ Remove-Item $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue
 def update_poll_loop(server_url: str, device_id: str, service_name: str, install_root: Path):
     """Background loop that checks for newer agent versions and applies them safely."""
     staging = staging_dir_path(install_root)
+    update_state(update_available=False, latest_version=AGENT_VERSION)
     while True:
         wait_s = random.randint(UPDATE_MIN_INTERVAL, UPDATE_MAX_INTERVAL)
-        time.sleep(wait_s)
+        # Allow a user-initiated "Update now" request to short-circuit the sleep
+        forced = False
+        for _ in range(wait_s):
+            time.sleep(1)
+            state = load_state()
+            if state.get("force_update_check"):
+                forced = True
+                state.pop("force_update_check", None)
+                save_state(state)
+                break
         try:
             resp_data = api_call(server_url, "GET", f"/agent/version?device_id={device_id}&current_version={AGENT_VERSION}")
-            if not isinstance(resp_data, dict) or not resp_data.get("update_available"):
+            server_version = resp_data.get("version") if isinstance(resp_data, dict) else None
+            update_flagged = isinstance(resp_data, dict) and bool(resp_data.get("update_available"))
+            # Skip only when server says no update AND client-side versions match
+            if not update_flagged and server_version == AGENT_VERSION:
+                update_state(update_available=False, latest_version=server_version or AGENT_VERSION, swap_in_progress=False)
+                continue
+            if not isinstance(resp_data, dict):
                 continue
             
             download_url = cast(str, resp_data.get("download_url"))
             checksum = cast(str, resp_data.get("checksum_sha256"))
             new_version = cast(str, resp_data.get("version"))
+
+            if new_version == AGENT_VERSION:
+                log("INFO", f"Agent already at latest version ({AGENT_VERSION}); skipping update.")
+                update_state(update_available=False, latest_version=new_version)
+                continue
             if not download_url or not new_version:
+                update_state(update_available=False, latest_version=AGENT_VERSION, swap_in_progress=False)
                 continue
 
-            file_name = download_url.split("/")[-1].split("?")[0] or f"agent-{new_version}.exe"
+            update_state(update_available=True, latest_version=new_version)
+            _raw_name = download_url.split("/")[-1].split("?")[0]
+            file_name = _raw_name if _raw_name.lower().endswith(".exe") else f"agent-{new_version}.exe"
             staged_path = staging / file_name
+
+            # Skip download if we already have the correctly staged file
+            if staged_path.exists() and checksum:
+                actual = compute_sha256(staged_path)
+
+                if actual.lower() == checksum.lower() and new_version != AGENT_VERSION:
+                    log("INFO", f"Update {new_version} already staged; proceeding to swap.")
+                    schedule_binary_swap(staged_path, service_name, server_url)
+                    continue
+
             log("INFO", f"⬇ Downloading agent update {new_version}…")
             download_binary(download_url, staged_path)
             if checksum:
@@ -756,7 +965,8 @@ def update_poll_loop(server_url: str, device_id: str, service_name: str, install
                     staged_path.unlink(missing_ok=True)
                     continue
             log("INFO", f"Update {new_version} ready; scheduling binary swap.")
-            schedule_binary_swap(staged_path, service_name)
+            update_state(update_available=False, latest_version=new_version, swap_in_progress=True)
+            schedule_binary_swap(staged_path, service_name, server_url)
         except Exception as e:
             log("WARN", f"Version check/apply failed: {e}")
 
@@ -782,33 +992,27 @@ def start_watchdog_process(server_url: str, service_name: str):
 
 
 def watchdog_loop(parent_pid: int, service_name: str, server_url: str):
-    """Runs in watchdog mode."""
-    log("INFO", f"Watchdog guarding PID {parent_pid}")
+    """Runs in watchdog mode — monitors the SERVICE, not the PID, to survive binary swaps."""
+    log("INFO", f"Watchdog started (service={service_name})")
     install_root = current_binary_path().parent
     lock_file = install_root / SWAP_LOCK_FILE
 
-    # Clean up any stale lock file from a previous failed swap attempt
-    # (if the swap script crashed before removing the lock, we clear it here)
+    # Never remove swap lock automatically — let the swap helper clean it up
     if lock_file.exists():
-        # Only clear it if parent is alive — if parent is already gone, the
-        # swap helper is likely still running so we should respect the lock
-        if parent_pid and psutil.pid_exists(parent_pid):
-            try:
-                lock_file.unlink()
-                log("INFO", "Cleared stale swap lock file on watchdog startup.")
-            except Exception:
-                pass
+        log("INFO", "Swap lock detected on watchdog startup — update may be in progress.")
 
     while True:
-        if parent_pid and not psutil.pid_exists(parent_pid):
-            # Check for swap lock before restarting
-            if lock_file.exists():
-                log("INFO", "Agent stopped but swap in progress. Watchdog idling...")
-                time.sleep(WATCHDOG_INTERVAL * 2)
-                continue
+        # Respect swap in progress — do nothing while lock file exists
+        if lock_file.exists():
+            log("INFO", "Swap in progress. Watchdog waiting...")
+            time.sleep(WATCHDOG_INTERVAL)
+            continue
 
-            log("WARN", "Primary agent stopped — attempting restart.")
+        # Service-based detection: safer than PID tracking across binary swaps
+        if not is_service_running(service_name):
+            log("WARN", "Agent service not running — attempting restart.")
             restart_service(service_name)
+            # Fallback: launch directly if service restart failed
             if not is_service_running(service_name):
                 try:
                     exe = current_binary_path()
@@ -816,9 +1020,10 @@ def watchdog_loop(parent_pid: int, service_name: str, server_url: str):
                     if AGENT_AUTH_TOKEN:
                         cmd.append(f"--token={AGENT_AUTH_TOKEN}")
                     subprocess.Popen(cmd, stdin=subprocess.DEVNULL, creationflags=DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP)
+                    log("INFO", "Agent launched directly as fallback after service restart failed.")
                 except Exception:
                     pass
-            parent_pid = 0  # prevent tight loop
+
         time.sleep(WATCHDOG_INTERVAL)
 
 
@@ -862,25 +1067,118 @@ def protected_uninstall_flow(server_url: str, otp: str | None, service_name: str
 
     if otp:
         code = otp.strip()
+        if not code:
+            log("ERROR", "OTP is required for uninstall.")
+            return False
+            
+        resp = api_call(server_url, "POST", "/verify-uninstall", {
+            "device_id": device_id,
+            "otp": code,
+            "hostname": get_hostname(),
+        })
+        
+        if not resp or resp.get("status") != "ok":
+            detail = resp.get("detail") if resp else "No response from server"
+            log("ERROR", f"Uninstall blocked: invalid or expired OTP. {detail}")
+            return False
     else:
         import tkinter as tk
         from tkinter import simpledialog
+        from PIL import Image, ImageTk
+        from pathlib import Path
+        import sys
+        
         root = tk.Tk()
         root.withdraw()
-        code = simpledialog.askstring("Uninstall Authorization", "Enter uninstall OTP from admin portal:")
+        
+        # Set window icon for all dialogs to match SentraGuard branding
+        try:
+            base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+            icon_path = base_dir / "assets" / "sentraguard_tray.png"
+            if icon_path.exists():
+                _img = Image.open(icon_path).convert("RGBA").resize((48,48))
+                tk_icon = ImageTk.PhotoImage(_img)
+                root.iconphoto(True, tk_icon) # Set True to propagate
+                root._sg_icon = tk_icon  # Keep reference
+        except Exception:
+            pass
+            
+        custom_result = []
+        import tkinter.messagebox as msgbox
+        
+        def on_ok(event=None):
+            val = entry.get().strip()
+            if not val:
+                return  # Ignore empty submissions (prevents lingering Enter keypress issue)
+                
+            dlg.config(cursor="wait")
+            ok_btn.config(state="disabled")
+            dlg.update()
+            
+            resp = api_call(server_url, "POST", "/verify-uninstall", {
+                "device_id": device_id,
+                "otp": val,
+                "hostname": get_hostname(),
+            })
+            
+            dlg.config(cursor="")
+            ok_btn.config(state="normal")
+            
+            if not resp or resp.get("status") != "ok":
+                detail = resp.get("detail") if resp else "Server unreachable or timeout"
+                msgbox.showerror("Error", f"Invalid OTP: {detail}", parent=dlg)
+                entry.delete(0, 'end')
+                entry.focus()
+            else:
+                custom_result.append(val)
+                dlg.destroy()
+                
+        def on_cancel():
+            dlg.destroy()
+
+        dlg = tk.Toplevel(root)
+        dlg.title("Uninstall Authorization")
+        dlg.configure(bg="#1A212D")
+        dlg.attributes("-topmost", True)
+        dlg.focus_force()
+        
+        # Centering window over screen bounds
+        w, h = 360, 180
+        sw = dlg.winfo_screenwidth()
+        sh = dlg.winfo_screenheight()
+        dlg.geometry(f"{w}x{h}+{int((sw-w)/2)}+{int((sh-h)/2)}")
+        dlg.resizable(False, False)
+        
+        # Propagate icon correctly
+        try: dlg.iconphoto(False, root._sg_icon)
+        except Exception: pass
+
+        tk.Label(dlg, text="🛡️ Uninstall Authorization", bg="#1A212D", fg="#FF4444", font=("Segoe UI", 12, "bold")).pack(pady=(16, 12))
+        tk.Label(dlg, text="Enter uninstall OTP from admin portal:", bg="#1A212D", fg="#E4E6EB", font=("Segoe UI", 10)).pack(pady=(0, 6))
+        
+        entry = tk.Entry(dlg, bg="#2A313C", fg="#FFFFFF", font=("Segoe UI", 11), insertbackground="white", justify="center", bd=1, relief="solid")
+        entry.pack(fill="x", padx=40, pady=4)
+        entry.focus()
+        entry.bind("<Return>", on_ok)
+
+        # Style Button Row
+        btn_frame = tk.Frame(dlg, bg="#1A212D")
+        btn_frame.pack(side="bottom", fill="x", pady=16)
+        
+        ok_btn = tk.Button(btn_frame, text="OK", width=12, bg="#007ACC", fg="white", activebackground="#005A9E", activeforeground="white", bd=0, font=("Segoe UI", 10, "bold"), command=on_ok)
+        ok_btn.pack(side="right", padx=(0, 40))
+        
+        cancel_btn = tk.Button(btn_frame, text="Cancel", width=12, bg="#2A313C", fg="#E4E6EB", activebackground="#3A414C", activeforeground="white", bd=0, font=("Segoe UI", 10), command=on_cancel)
+        cancel_btn.pack(side="right", padx=10)
+
+        dlg.transient(root)
+        dlg.grab_set()
+        root.wait_window(dlg)
+        
+        code = custom_result[0] if custom_result else None
         
     if not code:
         log("ERROR", "OTP is required for uninstall.")
-        return False
-
-    resp = api_call(server_url, "POST", "/verify-uninstall", {
-        "device_id": device_id,
-        "otp": code,
-        "hostname": get_hostname(),
-    })
-    if not resp or resp.get("status") != "ok":
-        detail = resp.get("detail") if resp else "No response from server"
-        log("ERROR", f"Uninstall blocked: invalid or expired OTP. {detail}")
         return False
 
     if verify_only:
@@ -2009,7 +2307,7 @@ def main():
                         help='Show a system tray icon (requires pystray + Pillow)')
     parser.add_argument('--token', default=os.environ.get("AGENT_TOKEN") or os.environ.get("ACS_AGENT_TOKEN"),
                         help='Bearer token used for agent authentication')
-    parser.add_argument('--service-name', default=SERVICE_NAME,
+    parser.add_argument('--service-name', default="SentraGuard",
                         help='Windows Service name (NSSM) to guard/restart')
     parser.add_argument('--install-dir', help='Override install directory (default Program Files/YourAgent)')
     parser.add_argument('--uninstall', action='store_true',
@@ -2024,6 +2322,11 @@ def main():
                         help='Which shell to expose for remote interactive access (default: cmd)')
     parser.add_argument('--verify-otp', action='store_true',
                         help='Standalone OTP validation via GUI prompt (exits 0=success, 1=fail)')
+    parser.add_argument('--force-update-check', action='store_true',
+                        help='Force update loop to run even in interactive user sessions for testing')
+    parser.add_argument('--tray-open', action='store_true',
+                        help='Automatically open console window on tray startup')
+    global args
     args = parser.parse_args()
 
     # If running uninstall without elevation, re-launch with UAC so service/cleanup succeeds.
@@ -2086,12 +2389,23 @@ def main():
         ensure_dir(install_root)
     staging_dir_path(install_root)
 
+    # Fix 4: Wait for any in-progress binary swap to complete before starting up.
+    # This prevents the new agent from interfering with the swap helper still running.
+    _startup_lock = install_root / SWAP_LOCK_FILE
+    if _startup_lock.exists():
+        log("INFO", "Swap lock detected at startup — waiting for update to finish...")
+        for _ in range(30):  # wait up to 30 * 2s = 60s
+            time.sleep(2)
+            if not _startup_lock.exists():
+                break
+        log("INFO", "Swap lock cleared. Continuing startup.")
+
     if args.uninstall:
         success = protected_uninstall_flow(server, args.otp, args.service_name, install_root)
         sys.exit(0 if success else 1)
 
     if args.verify_otp:
-        success = protected_uninstall_flow(server, None, args.service_name, install_root, verify_only=True)
+        success = protected_uninstall_flow(args.server, args.otp, args.service_name, install_root, verify_only=True)
         sys.exit(0 if success else 1)
 
     hostname = get_hostname()
@@ -2135,130 +2449,138 @@ def main():
         pass
     log('INFO', f"Agent PID: {os.getpid()}")
 
-    # ── Register device ─────────────────────────────────────────────────
-    log('INFO', 'Collecting system information…')
-    system_info = collect_system_info()
-    log('INFO', 'Collecting all local users…')
-    all_users = collect_all_users()
-    
-    log('INFO', 'Registering device with server…')
-    state = load_state()
-    device_id = state.get("device_id")
-    if device_id:
-        log('INFO', f"Cached device id {device_id}; refreshing registration.")
+    def _run_core():
+        global device_id
+        # ── Register device ─────────────────────────────────────────────────
+        log('INFO', 'Collecting system information…')
+        system_info = collect_system_info()
+        log('INFO', 'Collecting all local users…')
+        all_users = collect_all_users()
 
-    while True:
-        resp = api_call(server, 'POST', '/register', {
-            'hostname': hostname,
-            'ip_address': ip_address,
-            'system_info': system_info,
-            'all_users': all_users,
-            'agent_version': AGENT_VERSION,
-            'install_path': str(install_root),
-        })
-        if resp and 'device_id' in resp:
-            device_id = resp['device_id']
-            update_state(device_id=device_id, agent_version=AGENT_VERSION, last_seen=datetime.utcnow().isoformat() + "Z")
-            log('INFO', f"Registered as device #{device_id}")
-            break
+        log('INFO', 'Registering device with server…')
+        state = load_state()
+        device_id = state.get("device_id")
+        if device_id:
+            log('INFO', f"Resuming as device #{device_id} (cached); refreshing registration.")
         else:
-            log('WARN', f"Registration failed, retrying in {POLL_INTERVAL}s…")
-            time.sleep(POLL_INTERVAL)
+            log('INFO', "No cached device ID — performing first-time registration.")
 
-    # ── Start platform protections ──────────────────────────────────────
-    if not dry_run:
-        start_watchdog_process(server, args.service_name)
-        tg_thread = threading.Thread(target=tamper_guard_loop, args=(args.service_name,), daemon=True)
-        tg_thread.start()
-
-    # ── Start Interactive Shell Background Connection ───────────────────
-    if not dry_run and not args.no_shell:
-        start_interactive_shell_thread(server, device_id, args.shell)
-    else:
-        log('INFO', "Interactive shell disabled (dry-run or --no-shell).")
-
-    # ── Start Event Log Collector Background Thread ───────────────────
-    if not dry_run:
-        evt_thread = threading.Thread(
-            target=event_log_collector_thread,
-            args=(server, device_id, hostname),
-            daemon=True
-        )
-        evt_thread.start()
-    else:
-        log('DRY-RUN', "Skipping event log collection in dry-run mode.")
-
-    # ── Start System Info Refresh Background Thread ───────────────────
-    SYS_INFO_INTERVAL = 60  # refresh system info every 60 seconds to reduce overhead
-
-    def sys_info_refresh_loop():
         while True:
-            time.sleep(SYS_INFO_INTERVAL)
-            # Fetching silently in background
-            fresh_info = collect_system_info()
-            fresh_users = collect_all_users()
-            api_call(server, 'POST', '/register', {
+            resp = api_call(server, 'POST', '/register', {
                 'hostname': hostname,
-                'ip_address': get_ip(),
-                'system_info': fresh_info,
-                'all_users': fresh_users,
+                'ip_address': ip_address,
+                'system_info': system_info,
+                'all_users': all_users,
                 'agent_version': AGENT_VERSION,
                 'install_path': str(install_root),
             })
+            if resp and 'device_id' in resp:
+                new_id = resp['device_id']
+                if device_id and new_id != device_id:
+                    log('WARN', f"Server returned different device_id ({new_id}) than cached ({device_id}). Using server value.")
+                device_id = new_id
+                ensure_dir(runtime_root())
+                update_state(device_id=device_id, agent_version=AGENT_VERSION, last_seen=datetime.utcnow().isoformat() + "Z")
+                log('INFO', f"Registered as device #{device_id}")
+                break
+            else:
+                log('WARN', f"Registration failed, retrying in {POLL_INTERVAL}s…")
+                time.sleep(POLL_INTERVAL)
 
-    if not dry_run:
-        si_thread = threading.Thread(target=sys_info_refresh_loop, daemon=True)
-        si_thread.start()
+        # ── Start platform protections ──────────────────────────────────────
+        if not dry_run:
+            start_watchdog_process(server, args.service_name)
+            tg_thread = threading.Thread(target=tamper_guard_loop, args=(args.service_name,), daemon=True)
+            tg_thread.start()
 
-    # ── Start Software Inventory Background Thread ────────────────────────
-    if not dry_run:
-        sw_thread = threading.Thread(
-            target=software_inventory_thread,
-            args=(server, device_id),
-            daemon=True
-        )
-        sw_thread.start()
-    else:
-        log('DRY-RUN', "Skipping software inventory sync in dry-run mode.")
+        # ── Start Interactive Shell Background Connection ───────────────────
+        if not dry_run and not args.no_shell:
+            start_interactive_shell_thread(server, device_id, args.shell)
+        else:
+            log('INFO', "Interactive shell disabled (dry-run or --no-shell).")
 
-    # ── Start Activity Tracking Background Thread ─────────────────────────
-    if not dry_run and session_id.value != 0:
-        act_thread = threading.Thread(
-            target=activity_sampler_thread,
-            args=(server, device_id),
-            daemon=True
-        )
-        act_thread.start()
-    elif not dry_run:
-        log('DEBUG', "Skipping activity tracking in non-interactive session.")
-    else:
-        log('DRY-RUN', "Skipping activity tracking in dry-run mode.")
+        # ── Start Event Log Collector Background Thread ───────────────────
+        if not dry_run:
+            evt_thread = threading.Thread(
+                target=event_log_collector_thread,
+                args=(server, device_id, hostname),
+                daemon=True
+            )
+            evt_thread.start()
+        else:
+            log('DRY-RUN', "Skipping event log collection in dry-run mode.")
 
-    # ── Start Patch Management Thread ───────────────────────────────────
-    if not dry_run and session_id.value == 0:
-        upd_thread = threading.Thread(
-            target=update_poll_loop,
-            args=(server, device_id, args.service_name, install_root),
-            daemon=True
-        )
-        upd_thread.start()
-    elif not dry_run:
-        log('DEBUG', f"Patch management disabled in user session (Session ID {session_id.value}).")
+        # ── Start System Info Refresh Background Thread ───────────────────
+        SYS_INFO_INTERVAL = 60  # refresh system info every 60 seconds to reduce overhead
 
-    # ── Polling loop ────────────────────────────────────────────────────
-    log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
-    log('INFO', f"Polling for commands every {POLL_INTERVAL}s…")
+        def sys_info_refresh_loop():
+            while True:
+                time.sleep(SYS_INFO_INTERVAL)
+                # Fetching silently in background
+                fresh_info = collect_system_info()
+                fresh_users = collect_all_users()
+                api_call(server, 'POST', '/register', {
+                    'hostname': hostname,
+                    'ip_address': get_ip(),
+                    'system_info': fresh_info,
+                    'all_users': fresh_users,
+                    'agent_version': AGENT_VERSION,
+                    'install_path': str(install_root),
+                })
 
-    # If --tray mode: run poll loop in background thread and hand off to system tray
+        if not dry_run:
+            si_thread = threading.Thread(target=sys_info_refresh_loop, daemon=True)
+            si_thread.start()
+
+        # ── Start Software Inventory Background Thread ────────────────────────
+        if not dry_run:
+            sw_thread = threading.Thread(
+                target=software_inventory_thread,
+                args=(server, device_id),
+                daemon=True
+            )
+            sw_thread.start()
+        else:
+            log('DRY-RUN', "Skipping software inventory sync in dry-run mode.")
+
+        # ── Start Activity Tracking Background Thread ─────────────────────────
+        if not dry_run and session_id.value != 0:
+            act_thread = threading.Thread(
+                target=activity_sampler_thread,
+                args=(server, device_id),
+                daemon=True
+            )
+            act_thread.start()
+        elif not dry_run:
+            log('DEBUG', "Skipping activity tracking in non-interactive session.")
+        else:
+            log('DRY-RUN', "Skipping activity tracking in dry-run mode.")
+
+        # ── Start Patch Management Thread ───────────────────────────────────
+        if not dry_run and (session_id.value == 0 or getattr(args, 'force_update_check', False)):
+            upd_thread = threading.Thread(
+                target=update_poll_loop,
+                args=(server, device_id, args.service_name, install_root),
+                daemon=True
+            )
+            upd_thread.start()
+        elif not dry_run:
+            log('DEBUG', f"Patch management disabled in user session (Session ID {session_id.value}).")
+
+        # ── Polling loop ────────────────────────────────────────────────────
+        log('INFO', f"Agent Elevation: {'Administrator' if is_admin() else 'Standard User'}")
+        log('INFO', f"Polling for commands every {POLL_INTERVAL}s…")
+
+        main_loop(server, device_id, dry_run)
+
+        # If --tray mode: run poll loop in background thread and hand off to system tray
+
     if getattr(args, 'tray', False):
-        poll_thread = threading.Thread(target=lambda: main_loop(server, device_id, dry_run), daemon=True)
-        poll_thread.start()
-        run_with_tray(server, device_id)
+        threading.Thread(target=_run_core, daemon=True).start()
+        run_with_tray(server, load_state().get('device_id'), getattr(args, 'tray_open', False))
         return
-
-    main_loop(server, device_id, dry_run)
-
-
+    
+    _run_core()
 def main_loop(server, device_id, dry_run=False):
     """The main polling loop — runs indefinitely."""
     global LAST_SYNC_TS
@@ -2324,12 +2646,11 @@ def main_loop(server, device_id, dry_run=False):
         except Exception as e:
             log('ERROR', f"Unexpected error: {e}")
 
-        if time.time() - last_state_write >= 60:
-            try:
+        try:
+            if 'LAST_SYNC_TS' in globals() and LAST_SYNC_TS:
                 update_state(last_seen=LAST_SYNC_TS.isoformat() + "Z")
-            except Exception:
-                pass
-            last_state_write = time.time()
+        except Exception:
+            pass
 
         time.sleep(POLL_INTERVAL)
 
@@ -2362,11 +2683,14 @@ def _create_tray_image():
     # Dark navy shield background
     draw.polygon([(32, 4), (58, 16), (58, 36), (32, 60), (6, 36), (6, 16)], fill=(26, 37, 53))
     # White 'A' letter for "Admin"
-    draw.text((22, 18), "A", fill=(255, 255, 255))
+    try:
+        draw.text((22, 18), "A", fill=(255, 255, 255))
+    except Exception:
+        pass # Fallback to solid shield if default font isn't bundled on machine
     return img
 
 
-def run_with_tray(server, device_id):
+def run_with_tray(server, device_id, auto_open=False):
     """Launch agent main loop as a background thread, then show a system tray icon."""
     try:
         import pystray  # type: ignore
@@ -2375,7 +2699,18 @@ def run_with_tray(server, device_id):
         main_loop(server, device_id)
         return
 
-    log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'agent_debug.log')
+    import tkinter as tk
+    win = tk.Tk()
+    win.withdraw()
+    global _console_win
+    _console_win = win
+
+    # Resolve log path the exact same way def log() does
+    exe_dir = Path(os.path.dirname(os.path.abspath(sys.executable)))
+    log_path = Path(os.environ.get("TEMP", ".")) / "agent_debug.log"
+    if "Program Files" in str(exe_dir):
+        log_path = exe_dir / "agent_debug.log"
+    log_path = str(log_path) # support join checks if any
 
     def read_log_tail(lines=200):
         try:
@@ -2385,86 +2720,282 @@ def run_with_tray(server, device_id):
             return "No log entries yet."
 
     def open_console(icon=None, item=None):
-        """Lightweight status console window."""
-        def _show():
-            import tkinter as tk
-            from tkinter import scrolledtext
+        """Show the status console window."""
+        global _console_win
+        if '_console_win' in globals() and _console_win:
+            try:
+                _console_win.deiconify()
+                _console_win.lift()
+                _console_win.focus_force()
+                return
+            except Exception:
+                pass
 
-            state = load_state()
-            win = tk.Tk()
-            win.title("YourAgent Console")
-            win.geometry("520x360")
-            win.resizable(False, False)
+    def _setup_ui(win):
+        try:
+            from tkinter import ttk, scrolledtext
+            from PIL import ImageTk  # type: ignore
 
-            status_color = "#2ecc71"
-            status_text = "Online"
-            if not LAST_SYNC_TS or (datetime.utcnow() - LAST_SYNC_TS).total_seconds() > 45:
-                status_color = "#f1c40f"
-                status_text = "Idle"
+            base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+            icon_path = base_dir / "assets" / "sentraguard_tray.png"
 
-            header = tk.Frame(win, bg="#1a2535", height=50)
-            header.pack(fill="x")
-            tk.Label(header, text="YourAgent Endpoint", fg="white", bg="#1a2535",
-                     font=("Segoe UI", 12, "bold")).pack(side="left", padx=14, pady=10)
-            tk.Label(header, text=f"{status_text}", fg=status_color, bg="#1a2535",
-                     font=("Segoe UI", 11, "bold")).pack(side="right", padx=14)
+            C = {
+                "bg": "#0B1F2A", "bg2": "#0F2D3B", "card": "#121820",
+                "accent": "#1E90FF", "accent2": "#1474d6",
+                "green": "#00E676", "yellow": "#FFC107", "red": "#FF3D00",
+                "text": "#E8F3FF", "muted": "#9FB6C8", "border": "#1F3542", "log_bg": "#0F1722"
+            }
 
-            body = tk.Frame(win, padx=12, pady=10)
+            win.title("SentraGuard Agent Console")
+            win.geometry("900x620")
+            win.minsize(760, 520)
+            win.configure(bg=C["bg"])
+
+            # Window icon
+            try:
+                import PIL.Image
+                _img = PIL.Image.open(icon_path).convert("RGBA") if icon_path.exists() else _create_tray_image()
+                _img = _img.resize((48, 48))
+                tk_icon = ImageTk.PhotoImage(_img)
+                win.iconphoto(False, tk_icon)
+                win._sg_icon = tk_icon
+            except Exception as e:
+                log('WARN', f"Failed to set window icon: {e}")
+
+            # Styles
+            style = ttk.Style(win)
+            style.theme_use("clam")
+            style.configure("TFrame", background=C["bg"])
+            style.configure("Card.TFrame", background=C["card"])
+            style.configure("TLabel", background=C["bg"], foreground=C["text"], font=("Segoe UI", 10))
+            style.configure("Card.TLabel", background=C["card"], foreground=C["text"], font=("Segoe UI", 10))
+            style.configure("Muted.TLabel", background=C["card"], foreground=C["muted"], font=("Segoe UI", 9))
+            style.configure("TButton", background=C["accent"], foreground="white", relief="flat", borderwidth=0, font=("Segoe UI", 9, "bold"), padding=(12, 6))
+            style.map("TButton", background=[("active", C["accent2"])])
+
+            # Header
+            hdr = tk.Frame(win, bg=C["bg"], height=72)
+            hdr.pack(fill="x", side="top", pady=(6, 0))
+            hdr.pack_propagate(False)
+            left = tk.Frame(hdr, bg=C["bg"])
+            left.pack(side="left", padx=14, pady=6)
+            try:
+                import PIL.Image
+                header_icon_path = base_dir / "assets" / "sentraguard_logo.png"
+                if not header_icon_path.exists():
+                    header_icon_path = icon_path # Fallback to tray icon
+                _himg = PIL.Image.open(header_icon_path).convert("RGBA")
+                # Scale proportionally based on 44px height so wide logos don't get squished
+                h = 44
+                w = int(h * _himg.width / _himg.height)
+                _himg = _himg.resize((w, h))
+                tk_h_icon = ImageTk.PhotoImage(_himg)
+                header_logo = tk.Label(left, image=tk_h_icon, bg=C["bg"])
+                header_logo.image = tk_h_icon  # Keep reference
+                header_logo.grid(row=0, column=0, rowspan=2, padx=(0, 10))
+            except Exception:
+                tk.Label(left, text="🛡️", bg=C["bg"], fg=C["green"], font=("Segoe UI Emoji", 28)).grid(row=0, column=0, rowspan=2, padx=(0, 10))
+            title_var = tk.StringVar(value="SentraGuard status")
+            subtitle_var = tk.StringVar(value="Secure • Protect • Control")
+
+            right = tk.Frame(hdr, bg=C["bg"])
+            right.pack(side="right", padx=14, pady=10)
+            update_status_var = tk.StringVar(value="Latest version")
+            update_status = tk.Label(right, textvariable=update_status_var, bg=C["bg"], fg=C["muted"], font=("Segoe UI", 9))
+            update_status.pack(side="bottom", anchor="e")
+            refresh_btn = ttk.Button(right, text="Update now", style="TButton")
+            refresh_btn.pack(side="top")
+
+            # Body
+            body = ttk.Frame(win, style="TFrame", padding=16)
             body.pack(fill="both", expand=True)
 
-            tk.Label(body, text=f"Server: {server}", anchor="w").pack(fill="x")
-            tk.Label(body, text=f"Device ID: {device_id}", anchor="w").pack(fill="x")
-            tk.Label(body, text=f"Agent version: {AGENT_VERSION}", anchor="w").pack(fill="x")
-            tk.Label(body, text=f"Last sync: {LAST_SYNC_TS.isoformat() if LAST_SYNC_TS else '—'}", anchor="w").pack(fill="x")
-            tk.Label(body, text=f"Install path: {state.get('install_path', 'unknown')}", anchor="w").pack(fill="x")
+            # Issues card
+            issues = tk.Frame(body, bg=C["card"], padx=12, pady=12, highlightbackground=C["border"], highlightthickness=1)
+            issues.pack(fill="x", pady=(0, 12))
+            tk.Label(issues, text="Issues", bg=C["card"], fg=C["text"], font=("Segoe UI", 11, "bold")).pack(anchor="w", pady=(0, 6))
+            issue_row = tk.Frame(issues, bg=C["card"])
+            issue_row.pack(fill="x")
+            issue_icon = tk.Label(issue_row, text="⏳", bg=C["card"], fg=C["yellow"], font=("Segoe UI", 12))
+            issue_icon.pack(side="left", padx=(4, 6))
+            issue_text = tk.Label(issue_row, text="Awaiting first check-in.", bg=C["card"], fg=C["text"], font=("Segoe UI", 10))
+            issue_text.pack(side="left", fill="x", expand=True)
 
-            tk.Label(body, text="Recent log:", font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(8, 2))
-            log_box = scrolledtext.ScrolledText(body, height=10, font=("Consolas", 9))
-            log_box.pack(fill="both", expand=True)
-            log_box.insert("end", read_log_tail(120))
+            # status cards
+            cards_row = ttk.Frame(body, style="TFrame")
+            cards_row.pack(fill="x", pady=(0, 12))
+            status_var = tk.StringVar(value="Unknown")
+            device_var = tk.StringVar(value=device_id)
+            server_var = tk.StringVar(value=server)
+            sync_var = tk.StringVar(value="—")
+            version_var = tk.StringVar(value=AGENT_VERSION)
+
+            def _card(parent, heading, var, colour=None):
+                f = tk.Frame(parent, bg=C["card"], padx=12, pady=10, highlightbackground=C["border"], highlightthickness=1)
+                tk.Label(f, text=heading, bg=C["card"], fg=C["muted"], font=("Segoe UI", 9, "bold")).pack(anchor="w")
+                f_size = 9 if heading in ["Device ID", "Server"] else 11
+                w_len = 260 if heading == "Device ID" else 220
+                tk.Label(f, textvariable=var, bg=C["card"], fg=colour or C["text"], font=("Segoe UI", f_size, "bold"), wraplength=w_len, justify="left").pack(anchor="w", pady=(4, 0))
+                return f
+
+            for col, (title, var, colour) in enumerate([
+                ("Status", status_var, C["green"]),
+                ("Device ID", device_var, None),("Server", server_var, None),("Last Sync", sync_var, None),("Agent Version", version_var, None)
+            ]):
+                cards_row.columnconfigure(col, weight=1)
+                _card(cards_row, title, var, colour).grid(row=0, column=col, padx=(0, 8 if col < 4 else 0), sticky="nsew")
+
+            log_hdr = ttk.Frame(body, style="TFrame")
+            log_hdr.pack(fill="x", pady=(6, 4))
+            tk.Label(log_hdr, text="Recent Log", bg=C["bg"], fg=C["text"], font=("Segoe UI", 10, "bold")).pack(side="left")
+            log_open_btn = ttk.Button(log_hdr, text="Open File", style="TButton")
+            log_open_btn.pack(side="right", padx=(0, 6))
+            log_refresh_btn = ttk.Button(log_hdr, text="Refresh", style="TButton")
+            log_refresh_btn.pack(side="right", padx=(0, 6))
+
+            log_frame = tk.Frame(body, bg=C["log_bg"], highlightbackground=C["border"], highlightthickness=1)
+            log_frame.pack(fill="both", expand=True)
+            log_box = scrolledtext.ScrolledText(log_frame, bg=C["log_bg"], fg=C["text"], insertbackground=C["text"], font=("Consolas", 9), relief="flat", borderwidth=0, wrap="word")
+            log_box.pack(fill="both", expand=True, padx=4, pady=4)
             log_box.configure(state="disabled")
 
-            def refresh():
+            footer = tk.Frame(win, bg=C["bg"], height=28)
+            footer.pack(fill="x", side="bottom")
+            tk.Label(footer, text=f"{SERVICE_NAME} tray console • v{AGENT_VERSION}", bg=C["bg"], fg=C["muted"], font=("Segoe UI", 8)).pack(side="left", padx=12, pady=4)
+
+            def status_from_state(s):
+                last = s.get("last_seen") or s.get("last_sync")
+                if not last: return "Unknown", C["yellow"]
+                try:
+                    from datetime import datetime, timezone
+                    ts = datetime.fromisoformat(last.replace("Z", "+00:00"))
+                    age = (datetime.now(timezone.utc) - ts).total_seconds()
+                    if age < 60: return "Online", C["green"]
+                    if age < 300: return "Idle", C["yellow"]
+                    return "Offline", C["red"]
+                except Exception: return "Unknown", C["yellow"]
+
+            def refresh_all():
+                s = load_state()
+                label, colour = status_from_state(s)
+                status_var.set(label)
+                
+                # Update Device ID & Sync instantly
+                device_var.set(s.get("device_id", "—"))
+                last_seen_val = s.get("last_seen") or s.get("last_sync")
+                if last_seen_val:
+                    try:
+                        from datetime import datetime
+                        ts = datetime.fromisoformat(last_seen_val.replace("Z", "+00:00"))
+                        sync_var.set(ts.strftime("%Y-%m-%d %H:%M"))
+                    except Exception:
+                        sync_var.set("—")
+                else:
+                    sync_var.set("—")
+
+                current_ver = s.get("agent_version", AGENT_VERSION)
+                latest_ver = s.get("latest_version", current_ver)
+                has_update = bool(s.get("update_available"))
+                version_var.set(current_ver)
+                if has_update and latest_ver:
+                    update_status_var.set(f"Update available: {latest_ver}")
+                else:
+                    update_status_var.set(f"Latest version: {latest_ver}")
+
+                if colour == C["red"]:
+                    title_var.set("Action needed")
+                    issue_icon.config(text="⛔", fg=C["red"])
+                    issue_text.config(text="Unprotected - Agent is offline.", fg=C["red"])
+                elif colour == C["yellow"]:
+                    title_var.set("System idle")
+                    issue_icon.config(text="⚠", fg=C["yellow"])
+                    issue_text.config(text="Action needed - Device idle.", fg=C["yellow"])
+                else:
+                    title_var.set("Protected")
+                    issue_icon.config(text="✅", fg=C["green"])
+                    issue_text.config(text="Protected - System is secure.", fg=C["green"])
                 log_box.configure(state="normal")
                 log_box.delete("1.0", "end")
-                log_box.insert("end", read_log_tail(120))
+                log_box.insert("end", read_log_tail(150))
                 log_box.configure(state="disabled")
-                win.update_idletasks()
 
-            tk.Button(body, text="Refresh", command=refresh).pack(anchor="e", pady=6)
-            win.mainloop()
+            def auto_refresh():
+                if not win.winfo_exists(): return
+                refresh_all(); win.after(5000, auto_refresh)
 
-        threading.Thread(target=_show, daemon=True).start()
+            def request_update_now():
+                try:
+                    state = load_state()
+                    state["force_update_check"] = True
+                    save_state(state)
+                    update_status_var.set("Checking for updates…")
+                except Exception:
+                    update_status_var.set("Update request failed")
+                refresh_all()
+
+            refresh_btn.configure(command=request_update_now)
+            log_refresh_btn.configure(command=refresh_all)
+            log_open_btn.configure(command=lambda: os.startfile(str(log_path)) if os.path.exists(log_path) else None)
+
+            def on_close(): win.withdraw()
+            win.protocol("WM_DELETE_WINDOW", on_close)
+            refresh_all()
+            win.after(5000, auto_refresh)
+        except Exception as e:
+            import traceback
+            log('ERROR', f'Console UI Crash: {e}\n{traceback.format_exc()}')
 
     def on_open_log(icon, item):
-        if hasattr(os, "startfile"):
-            os.startfile(log_path)  # type: ignore[attr-defined]
+        if hasattr(os, "startfile"): os.startfile(log_path)
 
     def flush_queued_notifications():
-        """Display notifications queued by the service (session 0) instance."""
+        import time
         while True:
             try:
                 msg = dequeue_notification()
-                if msg:
-                    # Force re-check PowerShell availability before displaying
-                    global _POWERSHELL_LAST_CHECK
-                    _POWERSHELL_LAST_CHECK = 0.0
-                    execute_modern_notify(msg)
-                    continue
-            except Exception as e:
-                log('WARN', f"Tray notify watcher error: {e}")
+                if msg: execute_modern_notify(msg)
+            except: pass
             time.sleep(5)
 
-    icon_image = _create_tray_image()
-    menu = pystray.Menu(
-        pystray.MenuItem("🖥️ Open Console", open_console, default=True),
-        pystray.MenuItem("📄 Open Log", on_open_log),
-    )
-    tray = pystray.Icon("ACS Agent", icon_image, "ACS Agent", menu)
-    log('INFO', "🖥️  System tray icon active. Right-click the tray for status and logs.")
+    try:
+        # Load brand icon if available in assets, fallback to drawn shield
+        base_dir = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+        icon_path = base_dir / "assets" / "sentraguard_tray.png"
+        try:
+            import PIL.Image
+            icon_image = PIL.Image.open(icon_path).convert("RGBA") if icon_path.exists() else _create_tray_image()
+        except Exception:
+            icon_image = _create_tray_image()
+            
+        # Remove emojis for max compatibility in Win32 menu structures
+        menu = pystray.Menu(
+            pystray.MenuItem("Open Console", open_console, default=True),
+            pystray.MenuItem("Open Log", on_open_log)
+        )
+        tray = pystray.Icon("SentraGuard Agent", icon_image, "SentraGuard Agent", menu)
+        tray.default_action = open_console
+    except Exception as e:
+        import traceback
+        log('ERROR', f"🚨 Tray Setup Crash: {e}\n{traceback.format_exc()}")
+        raise e
+    
+    # SETUP UI and Run
+    _setup_ui(win)
+    if getattr(args, 'tray_open', False): win.after(100, open_console)
+    log('INFO', "🛡️  SentraGuard tray is active. Right-click the tray for status and logs.")
+    def _run_tray_with_safety():
+        try:
+            log('INFO', "🛡️ Tray thread starting tray.run()")
+            tray.run()
+        except Exception as e:
+            import traceback
+            log('ERROR', f"🚨 Tray Loop Crash: {e}\n{traceback.format_exc()}")
+
+    import threading
     threading.Thread(target=flush_queued_notifications, daemon=True).start()
-    tray.run()
-
-
+    threading.Thread(target=_run_tray_with_safety, daemon=True).start()
+    
+    win.mainloop()
+    return
 if __name__ == '__main__':
     main()
