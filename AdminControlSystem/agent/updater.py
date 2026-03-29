@@ -209,7 +209,8 @@ def update_poll_loop(server_url: str, device_id: str, service_name: str, install
                 break
 
         try:
-            resp_data = api_call(server_url, "GET", f"/agent/version?device_id={device_id}&current_version={AGENT_VERSION}")
+            current_device_id = state.get('device_id') or device_id
+            resp_data = api_call(server_url, "GET", f"/agent/version?device_id={current_device_id}&current_version={AGENT_VERSION}")
             server_version = resp_data.get("version") if isinstance(resp_data, dict) else None
             update_flagged = isinstance(resp_data, dict) and bool(resp_data.get("update_available"))
 

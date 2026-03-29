@@ -161,11 +161,12 @@ class ActivityLog(Base):
     device_id = Column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
     timestamp = Column(DateTime, default=utcnow, index=True)
     window_title = Column(Text, nullable=True)
-    process_name = Column(String(260), nullable=True)
-    username = Column(String(255), nullable=True)
+    process_name = Column(String(260), nullable=True, index=True)
+    username = Column(String(255), nullable=True, index=True)
     idle_seconds = Column(Integer, default=0)
     click_count = Column(Integer, default=0)
     keypress_count = Column(Integer, default=0)
+    url = Column(Text, nullable=True, index=True)
 
     device = relationship("Device", back_populates="activity_logs")
 
@@ -216,6 +217,7 @@ class User(Base):
     hashed_password = Column(String(255), nullable=False)
     is_active = Column(Boolean, default=True)
     role = Column(String(20), default="admin")   # "admin" | "viewer"
+    department = Column(String(255), nullable=True)
 
     def __repr__(self):
         return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
@@ -243,3 +245,19 @@ _ensure_column("devices", "agent_version", "VARCHAR(32)")
 _ensure_column("devices", "last_version_check", "DATETIME")
 _ensure_column("devices", "install_path", "VARCHAR(260)")
 _ensure_column("activity_logs", "username", "VARCHAR(255)")
+_ensure_column("activity_logs", "url", "VARCHAR(2048)")
+_ensure_column("activity_logs", "click_count", "INTEGER DEFAULT 0")
+_ensure_column("activity_logs", "keypress_count", "INTEGER DEFAULT 0")
+_ensure_column("activity_logs", "idle_seconds", "INTEGER DEFAULT 0")
+_ensure_column("users", "department", "VARCHAR(255)")
+
+# Lightweight indexes for frequent analytics queries
+try:
+    with engine.begin() as conn:
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activity_device_ts ON activity_logs(device_id, timestamp)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activity_user_ts ON activity_logs(username, timestamp)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activity_process ON activity_logs(process_name)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_commands_created_at ON commands(created_at)"))
+except Exception:
+    # Index creation is best-effort to avoid startup failure on older SQLite versions.
+    pass

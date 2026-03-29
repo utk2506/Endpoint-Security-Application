@@ -84,9 +84,12 @@ def push_software_inventory(server: str, device_id: str) -> None:
         log('WARN', "Failed to send software inventory")
 
 
-def software_inventory_thread(server_url: str, device_id: str) -> None:
+def software_inventory_thread(server_url: str, initial_device_id: str) -> None:
     """Background thread: sends software inventory on a timer."""
     log('INFO', f"📦 Software inventory sync started (interval: {SOFTWARE_REFRESH_INTERVAL}s)")
+    from state import load_state
+    
+    device_id = load_state().get('device_id') or initial_device_id
     try:
         push_software_inventory(server_url, device_id)
     except Exception as e:
@@ -94,6 +97,7 @@ def software_inventory_thread(server_url: str, device_id: str) -> None:
 
     while True:
         try:
+            device_id = load_state().get('device_id') or initial_device_id
             push_software_inventory(server_url, device_id)
         except Exception as e:
             log('WARN', f"Software inventory error: {e}")

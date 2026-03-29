@@ -25,14 +25,17 @@ except ImportError:
         Backend = None
 
 
-async def interactive_shell_loop(server_url: str, device_id: str, shell_pref: str = "cmd") -> None:
-    ws_url = server_url.replace("http://", "ws://").replace("https://", "wss://") + f"/ws/agent/{device_id}"
+async def interactive_shell_loop(server_url: str, initial_device_id: str, shell_pref: str = "cmd") -> None:
+    from state import load_state
 
     global HAS_PYWINPTY
     if not HAS_PYWINPTY:
         log('WARN', "pywinpty not found at startup; remote shell will use basic pipes.")
 
     while True:
+        device_id = load_state().get('device_id') or initial_device_id
+        ws_url = server_url.replace("http://", "ws://").replace("https://", "wss://") + f"/ws/agent/{device_id}"
+
         pty_proc = None
         is_pty = False
         try:
@@ -40,7 +43,7 @@ async def interactive_shell_loop(server_url: str, device_id: str, shell_pref: st
             ps_path = os.path.join(system_root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
             cmd_path = os.path.join(system_root, 'System32', 'cmd.exe')
 
-            if shell_pref == "powershell" and powershell_available():
+            if shell_pref == "powershell" and powershell_available() and HAS_PYWINPTY:
                 shell_argv = [ps_path, "-NoLogo", "-NoProfile"]
             else:
                 shell_argv = [cmd_path]

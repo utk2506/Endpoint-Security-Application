@@ -8,3 +8,5 @@ python-jose[cryptography]==3.3.0
 python-multipart==0.0.9
 reportlab
 cryptography
+pandas
+openpyxl

@@ -35,7 +35,7 @@ WINDLL = getattr(ctypes, "windll", None)
 
 # ── Agent identity & paths ───────────────────────────────────────────────────
 
-AGENT_VERSION = "1.0.2"
+AGENT_VERSION = "1.0.3"
 SERVICE_NAME = "SentraGuard"
 DEFAULT_INSTALL_DIR = r"C:\Program Files\SentraGuard"
 PROGRAM_DATA_DIR = os.path.join(os.environ.get("PROGRAMDATA", r"C:\ProgramData"), "SentraGuard")

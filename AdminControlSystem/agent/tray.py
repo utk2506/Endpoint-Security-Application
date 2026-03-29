@@ -248,7 +248,7 @@ def run_with_tray(server: str, device_id, auto_open: bool = False) -> None:
                     issue_text.config(text="Action needed — Device idle.", fg=C["yellow"])
                 else:
                     issue_icon.config(text="✅", fg=C["green"])
-                    issue_text.config(text="Protected — System is secure.", fg=C["green"])
+                    issue_text.config(text="Protected1 — System is secure.", fg=C["green"])
 
                 log_box.configure(state="normal")
                 log_box.delete("1.0", "end")

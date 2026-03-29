@@ -21,6 +21,23 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+# ── Single-instance mutex helpers (Windows) ────────────────────────────────
+_MUTEX_HANDLE = None  # keep reference so it is not GC'd
+
+def _acquire_mutex(name: str) -> bool:
+    """Try to create a named Windows mutex. Returns True if this process is first."""
+    global _MUTEX_HANDLE
+    try:
+        _lib = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        handle = _lib.CreateMutexW(None, True, name)
+        if handle and _lib.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+            _lib.CloseHandle(handle)
+            return False
+        _MUTEX_HANDLE = handle
+        return True
+    except Exception:
+        return True  # non-Windows fallback — allow startup
+
 # ── Stdout/stderr redirect for --tray EXE diagnostics ─────────────────────
 try:
     if "--tray" in "".join(sys.argv):
@@ -148,7 +165,11 @@ def build_tray_command(server_url: str) -> str:
 
 
 def tray_present_in_user_session() -> tuple[bool, list]:
-    """Return (is_running, process_list) for agent.exe in user sessions."""
+    """Return (is_running, process_list) for agent.exe --tray processes.
+    
+    Uses the named mutex to check if a tray instance is alive — this is
+    reliable regardless of which session the process is in.
+    """
     processes = []
     try:
         out = subprocess.check_output(
@@ -173,19 +194,24 @@ def tray_present_in_user_session() -> tuple[bool, list]:
     except Exception:
         pass
 
-    if not processes:
-        try:
-            out = subprocess.check_output(
-                ["tasklist", "/FI", "IMAGENAME eq agent.exe", "/FI", "SESSION ne 0"],
-                creationflags=CREATE_NO_WINDOW,
-            )
-            if b"agent.exe" in out.lower():
-                processes.append({"pid": None, "session": None, "user": None, "source": "tasklist"})
-        except Exception:
-            pass
+    # Check the named mutex — if it exists another tray instance is alive
+    # (works regardless of which Windows session the process is in)
+    tray_mutex_alive = False
+    try:
+        _lib = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        h = _lib.OpenMutexW(0x00100000, False, "Global\\SentraGuard_Tray")  # SYNCHRONIZE
+        if h:
+            tray_mutex_alive = True
+            _lib.CloseHandle(h)
+    except Exception:
+        pass
 
-    running = any((p.get("session") not in (None, 0, -1)) for p in processes)
-    return running, processes
+    # Fall back to session-based detection if mutex check is inconclusive
+    if not tray_mutex_alive:
+        running_in_session = any((p.get("session") not in (None, -1)) for p in processes)
+        return running_in_session, processes
+
+    return tray_mutex_alive, processes
 
 
 def active_console_session_id() -> int:
@@ -391,11 +417,13 @@ def report_result(server: str, cmd_id, success: bool, output: str, admin_list=No
 
 # ── Main polling loop ─────────────────────────────────────────────────────
 
-def main_loop(server: str, device_id, dry_run: bool = False) -> None:
+def main_loop(server: str, initial_device_id, dry_run: bool = False) -> None:
     """Polls for commands indefinitely."""
     global LAST_SYNC_TS
+    from state import load_state
     while True:
         try:
+            device_id = load_state().get("device_id") or initial_device_id
             LAST_SYNC_TS = datetime.utcnow()
             resp = api_call(server, 'GET', f'/get_command/{device_id}')
             if resp and resp.get('command'):
@@ -488,6 +516,15 @@ def main() -> None:
 
     global args
     args = parser.parse_args()
+
+    # ── Single-instance guard ────────────────────────────────────────────────
+    # Watchdog and uninstall/verify-otp are helper modes — allow multiple.
+    # All other modes (service + tray) must be singletons.
+    if not args.watchdog and not args.uninstall and not args.verify_otp:
+        mutex_name = "Global\\SentraGuard_Tray" if args.tray else "Global\\SentraGuard_Service"
+        if not _acquire_mutex(mutex_name):
+            log('WARN', f"Another instance is already running ({mutex_name}). Exiting.")
+            sys.exit(0)
 
     # Elevate for uninstall if not already admin
     if args.uninstall and not is_admin():
@@ -730,9 +767,10 @@ def main() -> None:
         SYS_INFO_INTERVAL = 60
 
         def sys_info_refresh_loop():
+            from state import load_state, update_state
             while True:
                 time.sleep(SYS_INFO_INTERVAL)
-                api_call(server, 'POST', '/register', {
+                resp = api_call(server, 'POST', '/register', {
                     'hostname': hostname,
                     'ip_address': get_ip(),
                     'system_info': collect_system_info(),
@@ -740,6 +778,12 @@ def main() -> None:
                     'agent_version': AGENT_VERSION,
                     'install_path': str(install_root),
                 })
+                if resp and 'device_id' in resp:
+                    new_id = resp['device_id']
+                    current_device_id = load_state().get('device_id')
+                    if current_device_id and new_id != current_device_id:
+                        log('WARN', f"Server returned different device_id ({new_id}) than cached ({current_device_id}) on refresh. Updating state.")
+                        update_state(device_id=new_id)
 
         if not dry_run:
             threading.Thread(target=sys_info_refresh_loop, daemon=True).start()

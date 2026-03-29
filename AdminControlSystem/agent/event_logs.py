@@ -107,8 +107,11 @@ class EventLogCollector:
         if not all_events:
             return
 
+        from state import load_state
+        device_id = load_state().get('device_id') or self.device_id
+
         log('INFO', f"📋 Collected {len(all_events)} event log(s), sending to server…")
-        payload = {"device_id": self.device_id, "logs": all_events}
+        payload = {"device_id": device_id, "logs": all_events}
         resp = api_call(self.server_url, 'POST', '/api/v1/device/logs', payload)
         if resp and resp.get('status') == 'ok':
             log('INFO', f"✓ Sent {resp.get('inserted', 0)} event logs to server")

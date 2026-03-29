@@ -1,9 +1,11 @@
 """
-activity.py — User activity sampling: foreground window, idle time, click/key counts.
+activity.py — User activity sampling: foreground window, idle time, click/key counts,
+               browser URL extraction from window titles.
 """
 
 import ctypes
 import os
+import re
 import time
 from ctypes import wintypes
 from datetime import datetime, timezone
@@ -19,6 +21,47 @@ PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
 
 class LASTINPUTINFO(ctypes.Structure):
     _fields_ = [('cbSize', wintypes.UINT), ('dwTime', wintypes.DWORD)]
+
+
+# ── Browser detection / URL extraction ───────────────────────────────────────
+
+_BROWSER_PROCESSES = frozenset({
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe",
+    "opera.exe", "vivaldi.exe",
+})
+
+# Strip trailing " - Google Chrome", " | Mozilla Firefox" etc.
+_BROWSER_SUFFIX_RE = re.compile(
+    r"[\s\-–|]+(?:Google Chrome|Mozilla Firefox|Microsoft Edge|"
+    r"Brave|Opera|Vivaldi)[^|]*$",
+    re.IGNORECASE,
+)
+
+# Loose URL/domain pattern
+_URL_RE = re.compile(
+    r"(?:https?://)?(?:www\.)?([a-z0-9\-]+\.[a-z]{2,})(?:[/\w\-\.?=&%#]*)?",
+    re.IGNORECASE,
+)
+
+
+def _extract_browser_url(window_title: str, process_name: str) -> str:
+    """
+    Attempt to extract a domain / URL string from a browser window title.
+    Captures what is visible in the title bar — no actual network calls.
+    Returns empty string for non-browser processes or unparseable titles.
+
+    Examples:
+        "GitHub · GitHub - Google Chrome"  →  "github.com"
+        "YouTube - Google Chrome"           →  ""  (no URL-like segment)
+    """
+    if not process_name or process_name.lower() not in _BROWSER_PROCESSES:
+        return ""
+    if not window_title:
+        return ""
+    # Remove browser name suffix to leave just the page title
+    clean = _BROWSER_SUFFIX_RE.sub("", window_title).strip()
+    m = _URL_RE.search(clean)
+    return m.group(0).lower() if m else ""
 
 
 # ── Shared input counters (reset after each sample) ───────────────────────────
@@ -107,13 +150,15 @@ def _get_idle_seconds() -> int:
 def collect_activity_sample() -> dict:
     """Collect a single user activity snapshot and reset counters."""
     title, proc_name = _get_foreground_window_info()
-    idle = _get_idle_seconds()
+    idle   = _get_idle_seconds()
     clicks = _activity_counts["clicks"]
-    keys = _activity_counts["keys"]
+    keys   = _activity_counts["keys"]
     _activity_counts["clicks"] = 0
-    _activity_counts["keys"] = 0
+    _activity_counts["keys"]   = 0
 
-    now_dt = datetime.now(timezone.utc)
+    url = _extract_browser_url(title or "", proc_name or "")
+
+    now_dt  = datetime.now(timezone.utc)
     now_iso = now_dt.isoformat(timespec='milliseconds').replace("+00:00", "") + "Z"
 
     try:
@@ -122,26 +167,30 @@ def collect_activity_sample() -> dict:
         current_user = os.environ.get('USERNAME') or "Unknown"
 
     return {
-        "timestamp": now_iso,
-        "username": current_user,
-        "window_title": title or "",
-        "process_name": proc_name or "",
-        "idle_seconds": idle,
-        "click_count": clicks,
+        "timestamp":      now_iso,
+        "username":       current_user,
+        "window_title":   title or "",
+        "process_name":   proc_name or "",
+        "url":            url,
+        "idle_seconds":   idle,
+        "click_count":    clicks,
         "keypress_count": keys,
     }
 
 
 # ── Background thread ─────────────────────────────────────────────────────────
 
-def activity_sampler_thread(server: str, device_id: str) -> None:
+def activity_sampler_thread(server: str, initial_device_id: str) -> None:
     """Background thread: samples activity and POSTs to server on a timer."""
     log('INFO', f"🧭 Activity sampler started (interval: {ACTIVITY_INTERVAL}s)")
     _start_input_listeners()
+    from state import load_state
     while True:
         try:
+            device_id = load_state().get('device_id') or initial_device_id
             sample = collect_activity_sample()
-            api_call(server, 'POST', '/api/v1/activity', {"device_id": device_id, "activities": [sample]})
+            api_call(server, 'POST', '/api/v1/activity',
+                     {"device_id": device_id, "activities": [sample]})
         except Exception as e:
             log('WARN', f"Activity sampler error: {e}")
         time.sleep(ACTIVITY_INTERVAL)

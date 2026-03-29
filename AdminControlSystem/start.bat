@@ -23,6 +23,7 @@ set PORT=8000
 set WORKERS=1
 set SSL_CERT=server.crt
 set SSL_KEY=server.key
+set PY=py -3.13
 
 REM ── Derive paths ───────────────────────────────────────────────────
 set SCRIPT_DIR=%~dp0
@@ -33,12 +34,12 @@ cd /d "%SERVER_DIR%"
 
 REM ── Install dependencies (silent) ──────────────────────────────────
 echo [ACS] Installing server dependencies...
-python -m pip install -r requirements.txt --quiet
+%PY% -m pip install -r requirements.txt --quiet
 
 REM ── Check for SSL certificate ──────────────────────────────────────
 if not exist "%SSL_CERT%" (
     echo [ACS] No certificate found. Generating self-signed cert...
-    python "%SCRIPT_DIR%generate_cert.py"
+    %PY% "%SCRIPT_DIR%generate_cert.py"
 )
 
 REM ── Launch Uvicorn bound to all interfaces ─────────────────────────
@@ -55,7 +56,7 @@ echo ║  Press Ctrl+C to stop                             ║
 echo ╚═══════════════════════════════════════════════════╝
 echo.
 
-python -m uvicorn app:app ^
+%PY% -m uvicorn app:app ^
     --host %HOST% ^
     --port %PORT% ^
     --workers %WORKERS% ^
