@@ -45,15 +45,16 @@ class Device(Base):
         back_populates="device",
         cascade="all, delete-orphan",
     )
-    activity_logs = relationship(
-        "ActivityLog",
-        back_populates="device",
-        cascade="all, delete-orphan",
-    )
     uninstall_passwords = relationship(
         "UninstallPassword",
         back_populates="device",
         cascade="all, delete-orphan",
+    )
+    activity_events = relationship(
+        "ActivityEvent",
+        back_populates="device",
+        cascade="all, delete-orphan",
+        foreign_keys="ActivityEvent.device_id",
     )
 
     def __repr__(self):
@@ -100,11 +101,12 @@ class NotificationCampaign(Base):
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
     device_id = Column(String(36), ForeignKey("devices.id"), nullable=False)
+    title = Column(String(100), nullable=True, default="SentraGuard")
     message = Column(Text, nullable=False)
-    target_users = Column(Text, nullable=False)        # JSON array e.g. ["All"] or ["user1"]
-    start_time = Column(DateTime, nullable=False)
-    end_time = Column(DateTime, nullable=False)
-    interval_minutes = Column(Integer, nullable=False)
+    target_users = Column(Text, nullable=True, default='["All"]')   # JSON array e.g. ["All"]
+    start_time = Column(DateTime, nullable=True)                     # NULL = send once immediately
+    end_time = Column(DateTime, nullable=True)
+    interval_minutes = Column(Integer, nullable=True)                # NULL = one-time delivery
     last_sent = Column(DateTime, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=utcnow)
@@ -154,26 +156,6 @@ class EventLog(Base):
         return f"<EventLog(id={self.id}, event_id={self.event_id}, event_name='{self.event_name}')>"
 
 
-class ActivityLog(Base):
-    __tablename__ = "activity_logs"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    device_id = Column(String(36), ForeignKey("devices.id"), nullable=False, index=True)
-    timestamp = Column(DateTime, default=utcnow, index=True)
-    window_title = Column(Text, nullable=True)
-    process_name = Column(String(260), nullable=True, index=True)
-    username = Column(String(255), nullable=True, index=True)
-    idle_seconds = Column(Integer, default=0)
-    click_count = Column(Integer, default=0)
-    keypress_count = Column(Integer, default=0)
-    url = Column(Text, nullable=True, index=True)
-
-    device = relationship("Device", back_populates="activity_logs")
-
-    def __repr__(self):
-        return f"<ActivityLog(id={self.id}, device_id={self.device_id}, process='{self.process_name}')>"
-
-
 class UninstallPassword(Base):
     __tablename__ = "uninstall_passwords"
 
@@ -209,6 +191,45 @@ class AgentVersion(Base):
         return f"<AgentVersion(version='{self.version}', platform='{self.platform}', active={self.is_active})>"
 
 
+class ActivityEvent(Base):
+    """
+    Stores endpoint user activity events uploaded by the SentraGuard agent.
+    Events can be: LOGIN, LOGOUT, LOCK, UNLOCK, IDLE, ACTIVE,
+                   SCREEN_OFF, SCREEN_ON, STARTUP, SHUTDOWN
+    """
+    __tablename__ = "activity_events"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    # nullable FK — events may arrive before device is fully registered
+    device_id = Column(String(36), ForeignKey("devices.id"), nullable=True, index=True)
+    timestamp = Column(DateTime, nullable=False, index=True)   # event time (from agent)
+    event = Column(String(20), nullable=False, index=True)     # LOGIN | LOGOUT | IDLE …
+    username = Column(String(255), nullable=True, index=True)
+    machine = Column(String(255), nullable=True, index=True)   # hostname as reported by agent
+    serial = Column(String(128), nullable=True)
+    ip_address = Column(String(45), nullable=True)
+    duration = Column(String(32), nullable=True)               # human-readable, e.g. "12m"
+    os_version = Column(String(255), nullable=True)
+    synced = Column(Boolean, default=False)                    # True once server accepted it
+    created_at = Column(DateTime, default=utcnow)              # server receive time
+    # Application / input tracking (populated by APP_USAGE events from agent)
+    process_name   = Column(String(255), nullable=True, index=True)  # e.g. "chrome.exe"
+    window_title   = Column(String(512), nullable=True)
+    url            = Column(String(1024), nullable=True)
+    idle_seconds   = Column(Integer, nullable=True, default=0)
+    mouse_clicks   = Column(Integer, nullable=True, default=0)
+    keypress_count = Column(Integer, nullable=True, default=0)
+
+    device = relationship(
+        "Device",
+        back_populates="activity_events",
+        foreign_keys=[device_id],
+    )
+
+    def __repr__(self):
+        return f"<ActivityEvent(id={self.id}, event='{self.event}', machine='{self.machine}')>"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -235,7 +256,7 @@ def _ensure_column(table: str, column: str, ddl: str):
         with engine.begin() as conn:
             cols = [row[1] for row in conn.execute(text(f"PRAGMA table_info({table})"))]
             if column not in cols:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {ddl}"))
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
     except Exception:
         # Silent fail to avoid blocking startup; manual migration remains possible.
         pass
@@ -244,19 +265,29 @@ def _ensure_column(table: str, column: str, ddl: str):
 _ensure_column("devices", "agent_version", "VARCHAR(32)")
 _ensure_column("devices", "last_version_check", "DATETIME")
 _ensure_column("devices", "install_path", "VARCHAR(260)")
-_ensure_column("activity_logs", "username", "VARCHAR(255)")
-_ensure_column("activity_logs", "url", "VARCHAR(2048)")
-_ensure_column("activity_logs", "click_count", "INTEGER DEFAULT 0")
-_ensure_column("activity_logs", "keypress_count", "INTEGER DEFAULT 0")
-_ensure_column("activity_logs", "idle_seconds", "INTEGER DEFAULT 0")
+_ensure_column("devices", "is_uninstalled", "BOOLEAN DEFAULT 0")
 _ensure_column("users", "department", "VARCHAR(255)")
+
+# Activity events — ensure all columns exist for older installs that predate these fields.
+_ensure_column("activity_events", "machine",        "VARCHAR(255)")
+_ensure_column("activity_events", "serial",         "VARCHAR(128)")
+_ensure_column("activity_events", "ip_address",     "VARCHAR(45)")
+_ensure_column("activity_events", "os_version",     "VARCHAR(255)")
+_ensure_column("activity_events", "duration",       "VARCHAR(32)")
+# Application / input tracking columns (added with APP_USAGE event support)
+_ensure_column("activity_events", "process_name",   "VARCHAR(255)")
+_ensure_column("activity_events", "window_title",   "VARCHAR(512)")
+_ensure_column("activity_events", "url",            "VARCHAR(1024)")
+_ensure_column("activity_events", "idle_seconds",   "INTEGER DEFAULT 0")
+_ensure_column("activity_events", "mouse_clicks",   "INTEGER DEFAULT 0")
+_ensure_column("activity_events", "keypress_count", "INTEGER DEFAULT 0")
+
+# Notification campaigns — migrate existing DBs that may have NOT NULL constraints
+_ensure_column("notification_campaigns", "title", "VARCHAR(100) DEFAULT 'SentraGuard'")
 
 # Lightweight indexes for frequent analytics queries
 try:
     with engine.begin() as conn:
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activity_device_ts ON activity_logs(device_id, timestamp)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activity_user_ts ON activity_logs(username, timestamp)"))
-        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_activity_process ON activity_logs(process_name)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS idx_commands_created_at ON commands(created_at)"))
 except Exception:
     # Index creation is best-effort to avoid startup failure on older SQLite versions.

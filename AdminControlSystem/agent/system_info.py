@@ -148,6 +148,7 @@ def collect_system_info():
         result = subprocess.run(
             ['powershell', '-NoProfile', '-NonInteractive', '-Command', _PS_SYSTEM_INFO],
             capture_output=True, text=True, timeout=30,
+            encoding='utf-8', errors='replace',
             stdin=subprocess.DEVNULL,
             creationflags=CREATE_NO_WINDOW | CREATE_DEFAULT_ERROR_MODE,
         )
@@ -175,7 +176,7 @@ def collect_system_info():
                 else:
                     disk['recovery_key'] = "Not Encrypted"
 
-            log('INFO', f"✓ System info collected (CPU: {data.get('cpu_name','?')}, RAM: {data.get('ram_total_gb','?')} GB)")
+            log('INFO', f"System info collected (CPU: {data.get('cpu_name','?')}, RAM: {data.get('ram_total_gb','?')} GB)")
             return data
         else:
             log('WARN', f"System info PowerShell failed: {result.stderr.strip()[:200]}")

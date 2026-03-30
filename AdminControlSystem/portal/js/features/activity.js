@@ -1,144 +1,557 @@
 /**
- * features/activity.js
- * Activity stream, charts (status ring, app usage bar), device/user summary,
- * hourly heatmap, and CSV export.
+ * features/activity.js  — Activity Monitoring Dashboard v2
+ *
+ * Pulls all dashboard data from a single call to:
+ *   GET /api/activity/analytics   → KPIs, charts, heatmap, timeline
+ *   GET /api/activity/events      → paginated event feed table
+ *   GET /api/activity/machines    → machine filter dropdown
+ *   GET /api/activity/users       → user filter dropdown
+ *
+ * All original export names are preserved for dashboard.js compatibility.
  */
 
 import { api } from '../core/api.js';
-import { $, formatDate, escapeHtml, toast } from '../core/utils.js';
-import { _deviceCache } from './devices.js';
+import { $ } from '../core/utils.js';
 
-let activityPage       = 1;
-let activityLimit      = 20;
-let activityTotalPages = 1;
-let _lastActivityItems = [];
+// ── State ──────────────────────────────────────────────────────────────────
+let _period          = 'daily';   // 'daily' | 'weekly' | 'monthly' | 'yearly' | 'custom'
+let _customFrom      = '';
+let _customTo        = '';
+let _evtPage         = 1;
+let _evtTotalPages   = 1;
+let _charts          = {};        // { id: Chart }
+let _refreshing      = false;
+let _autoRefreshTimer    = null;
+let _autoRefreshCountdown = 60;
 
-let statusRingInstance  = null;
-let appUsageBarInstance = null;
-let sessionTable        = null;
+// ── Date Range Helpers ─────────────────────────────────────────────────────
+function _getRange(period) {
+    const now    = new Date();
+    const endDay = new Date(now);
+    endDay.setHours(23, 59, 59, 999);
 
-function activityFilters() {
-    const toIso = (v) => { if (!v) return null; const d = new Date(v); return isNaN(d.getTime()) ? null : d.toISOString(); };
+    if (period === 'daily') {
+        const start = new Date(now);
+        start.setHours(0, 0, 0, 0);
+        return { from: start.toISOString(), to: endDay.toISOString() };
+    }
+    if (period === 'weekly') {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 6);
+        start.setHours(0, 0, 0, 0);
+        return { from: start.toISOString(), to: endDay.toISOString() };
+    }
+    if (period === 'monthly') {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 29);
+        start.setHours(0, 0, 0, 0);
+        return { from: start.toISOString(), to: endDay.toISOString() };
+    }
+    if (period === 'yearly') {
+        const start = new Date(now);
+        start.setDate(start.getDate() - 364);
+        start.setHours(0, 0, 0, 0);
+        return { from: start.toISOString(), to: endDay.toISOString() };
+    }
+    // custom
+    const from = _customFrom ? new Date(_customFrom + 'T00:00:00').toISOString() : null;
+    const to   = _customTo   ? new Date(_customTo   + 'T23:59:59').toISOString() : null;
+    return { from, to };
+}
+
+// ── Active Filters ─────────────────────────────────────────────────────────
+function _getFilters() {
+    const range = _getRange(_period);
     return {
-        device: $('activityDevice')?.value || '',
-        username: $('activityUser')?.value || '',
-        department: $('activityDepartment')?.value || '',
-        application: $('activityApplication')?.value || '',
-        activity_state: $('activityState')?.value || '',
-        date_from: toIso($('activityFrom')?.value),
-        date_to: toIso($('activityTo')?.value),
-        min_duration: $('activityMinDuration')?.value || '',
-        search: $('activitySearch')?.value || '',
+        machine:      $('actMachine')?.value    || '',
+        username:     $('actUser')?.value       || '',
+        event_type:   $('actEventType')?.value  || '',
+        synced:       $('actSynced')?.value     || '',
+        search:       $('actSearch')?.value     || '',
+        process_name: $('actProcess')?.value    || '',
+        date_from:    range.from                || '',
+        date_to:      range.to                  || '',
     };
 }
 
-export function applyActivityFilters() {
-    loadActivity(1);
-    loadActivityUsers();
-    loadDeviceSummary();
-    loadHourlyHeatmap();
-    loadUserSummary();
-    loadActivityKpis();
-    loadAnalyticsCharts();
-    loadSessionTable(true);
+function _toQS(obj) {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(obj)) {
+        if (v !== null && v !== undefined && v !== '') p.append(k, v);
+    }
+    return p.toString();
 }
 
-export function resetActivityFilters() {
-    ['activityDevice','activityUser','activityDepartment','activityApplication','activityState','activityFrom','activityTo','activityMinDuration','activitySearch']
-        .forEach(id => { const el = $(id); if (el) el.value = ''; });
-    applyActivityFilters();
+// ── Chart Lifecycle ────────────────────────────────────────────────────────
+function _destroyChart(id) {
+    if (_charts[id]) { _charts[id].destroy(); delete _charts[id]; }
 }
 
-export async function loadActivityFilters() {
+// ── Primary Dashboard Refresh ──────────────────────────────────────────────
+async function _refreshDashboard() {
+    if (_refreshing) return;
+    _refreshing = true;
     try {
-        const data = await api('GET', '/api/v1/activity/filters');
-        const setOptions = (id, values, placeholder) => {
-            const el = $(id);
-            if (!el) return;
-            el.innerHTML = `<option value="">${placeholder}</option>`;
-            values.forEach(v => {
-                const opt = document.createElement('option');
-                opt.value = v;
-                opt.textContent = v;
-                el.appendChild(opt);
-            });
-        };
-        setOptions('activityUser', data.users || [], 'All users');
-        setOptions('activityDevice', data.devices || [], 'All devices');
-        setOptions('activityDepartment', data.departments || [], 'All departments');
-        setOptions('activityApplication', data.applications || [], 'All apps');
-    } catch (e) {
-        console.warn('loadActivityFilters failed', e);
+        const f  = _getFilters();
+        const qs = _toQS({
+            machine:    f.machine,
+            username:   f.username,
+            event:      f.event_type,
+            synced:     f.synced,
+            search:     f.search,
+            date_from:  f.date_from,
+            date_to:    f.date_to,
+        });
+        const qs2 = _toQS({
+            machine:   f.machine,
+            username:  f.username,
+            date_from: f.date_from,
+            date_to:   f.date_to,
+        });
+
+        const [analyticsRes, appRes] = await Promise.allSettled([
+            api('GET', `/api/activity/analytics?${qs}`),
+            api('GET', `/api/activity/app-usage?${qs2}`),
+        ]);
+
+        if (analyticsRes.status === 'fulfilled') {
+            const data = analyticsRes.value;
+            _renderKPIs(data.kpis || {});
+            _renderLineChart(data.hourly_series || {});
+            _renderDonut(data.kpis || {});
+            _renderTopMachinesBar(data.top_machines || []);
+            _renderSessionAnalysis(data.session_stats || {});
+            _renderHeatmap(data.heatmap || {});
+            _renderTimeline(data.timeline || {});
+            _updateRangeLabel(data.range || {});
+        } else {
+            console.warn('Activity analytics error:', analyticsRes.reason);
+        }
+
+        if (appRes.status === 'fulfilled') {
+            const a = appRes.value;
+            _renderLoginDistChart(a.login_distribution || []);
+            _renderAppDonut(a.app_breakdown || []);
+            _renderProductivityChart(a.productivity_by_user || []);
+        }
+    } catch (err) {
+        console.warn('Activity dashboard refresh error:', err);
+    } finally {
+        _refreshing = false;
     }
 }
 
-function formatHourLabel(h) {
-    if (h == null || isNaN(h)) return '—';
-    const hrs = Math.floor(h);
-    const mins = Math.round((h - hrs) * 60);
-    return `${String(hrs).padStart(2,'0')}:${String(mins).padStart(2,'0')}`;
+// ── KPI Cards ──────────────────────────────────────────────────────────────
+function _renderKPIs(kpis) {
+    const set = (id, v) => { const el = $(id); if (el) el.textContent = v ?? '—'; };
+    set('actKpiActive',  kpis.active  ?? 0);
+    set('actKpiIdle',    kpis.idle    ?? 0);
+    set('actKpiLocked',  kpis.locked  ?? 0);
+    set('actKpiOffline', kpis.offline ?? 0);
+    set('actKpiTotal',   kpis.total_events ?? 0);
+    set('actKpiHealth',  kpis.sync_health != null ? `${kpis.sync_health}%` : '—');
+
+    // also keep legacy stat IDs working
+    const set2 = (id, v) => { const el = $(id); if (el) el.textContent = v ?? '—'; };
+    set2('kpiActiveUsers',  kpis.active  ?? '—');
+    set2('kpiLoggedToday',  kpis.total_events ?? '—');
+    set2('kpiIdlePct',      kpis.sync_health != null ? `${100 - kpis.sync_health}%` : '—');
+    set2('kpiProd',         kpis.sync_health != null ? `${kpis.sync_health}%` : '—');
 }
 
-function formatIdle(sec) {
-    if (sec == null) return '—';
-    const s = Math.max(0, parseInt(sec, 10));
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60);
-    const r = s % 60;
-    if (m < 60) return `${m}m ${r}s`;
-    const h  = Math.floor(m / 60);
-    const mm = m % 60;
-    return `${h}h ${mm}m`;
+function _updateRangeLabel(range) {
+    const el = $('actRangeLabel');
+    if (!el || !range.from) return;
+    const fmt = iso => new Date(iso).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    el.textContent = `${fmt(range.from)} → ${fmt(range.to || new Date().toISOString())}`;
 }
 
-export function renderStatusRing(active, idle) {
-    const ctx = document.getElementById('statusRingChart');
-    if (!ctx) return;
-    if (statusRingInstance) statusRingInstance.destroy();
+// ── Line Chart: Active Users Over Time ─────────────────────────────────────
+function _renderLineChart(series) {
+    _destroyChart('actLineChart');
+    const ctx = document.getElementById('actLineChart');
+    if (!ctx || !series.labels?.length) return;
 
-    const total      = active + idle;
-    const activePerc = total > 0 ? ((active / total) * 100).toFixed(0) : 0;
-    const pctEl      = document.getElementById('activePercentageText');
-    if (pctEl) pctEl.textContent = activePerc + '%';
-
-    statusRingInstance = new Chart(ctx, {
-        type: 'doughnut',
+    _charts.actLineChart = new Chart(ctx, {
+        type: 'line',
         data: {
-            labels: ['Active', 'Idle'],
-            datasets: [{ data: [active, idle], backgroundColor: ['#4633ff', 'rgba(0,0,0,0.05)'], borderWidth: 0, hoverOffset: 4 }]
+            labels: series.labels,
+            datasets: [
+                {
+                    label: 'Active',
+                    data: series.active || [],
+                    borderColor: '#00E676',
+                    backgroundColor: 'rgba(0,230,118,0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 3,
+                    pointHoverRadius: 6,
+                },
+                {
+                    label: 'Idle',
+                    data: series.idle || [],
+                    borderColor: '#FFC107',
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.5,
+                    borderDash: [4, 3],
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 2,
+                },
+                {
+                    label: 'Locked',
+                    data: series.locked || [],
+                    borderColor: '#FF6B35',
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.5,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 2,
+                },
+                {
+                    label: 'Offline',
+                    data: series.offline || [],
+                    borderColor: '#FF3864',
+                    backgroundColor: 'transparent',
+                    borderWidth: 1.5,
+                    fill: false,
+                    tension: 0.4,
+                    pointRadius: 2,
+                },
+            ],
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            cutout: '80%',
+            interaction: { mode: 'index', intersect: false },
             plugins: {
-                legend: { display: false },
-                tooltip: { callbacks: { label: c => `${c.label}: ${formatIdle(c.raw)}` } }
-            }
-        }
+                legend: {
+                    display: true,
+                    position: 'top',
+                    labels: { color: '#9FB6C8', font: { size: 11 }, boxWidth: 10, usePointStyle: true },
+                },
+                tooltip: { mode: 'index', intersect: false },
+            },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(31,53,66,0.7)' },
+                    ticks: { color: '#7A8C9A', font: { size: 10 }, maxTicksLimit: 12, maxRotation: 0 },
+                },
+                y: {
+                    min: 0,
+                    grid: { color: 'rgba(31,53,66,0.7)' },
+                    ticks: { color: '#7A8C9A', font: { size: 10 }, precision: 0 },
+                },
+            },
+        },
     });
 }
 
-export function renderAppUsageBarChart(labelMap) {
-    const ctx = document.getElementById('appUsageBarChart');
+// ── Donut: Activity Breakdown ──────────────────────────────────────────────
+function _renderDonut(kpis) {
+    _destroyChart('actDonutChart');
+    const ctx = document.getElementById('actDonutChart');
     if (!ctx) return;
-    if (appUsageBarInstance) appUsageBarInstance.destroy();
 
-    const sorted = Object.entries(labelMap)
-        .filter(([k]) => k.toLowerCase() !== 'idle')
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8);
+    const vals  = [kpis.active || 0, kpis.idle || 0, kpis.locked || 0, kpis.offline || 0];
+    const total = vals.reduce((a, b) => a + b, 0) || 1;
 
-    appUsageBarInstance = new Chart(ctx, {
+    const pctEl = $('actDonutCenter');
+    if (pctEl) pctEl.innerHTML = `<div style="font-size:26px;font-weight:800;color:#E8F3FF;line-height:1">${vals[0]}</div><div style="font-size:10px;color:#7A8C9A;margin-top:2px;">of ${total}</div>`;
+
+    // Legend values
+    [['actDonutActive', vals[0]], ['actDonutIdle', vals[1]], ['actDonutLocked', vals[2]], ['actDonutOffline', vals[3]]].forEach(([id, v]) => {
+        const el = $(id);
+        if (el) {
+            el.querySelector('.act-donut-val').textContent = v;
+            el.querySelector('.act-donut-pct').textContent = `${Math.round((v / total) * 100)}%`;
+        }
+    });
+
+    _charts.actDonutChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels: ['Active', 'Idle', 'Locked', 'Offline'],
+            datasets: [{
+                data: vals,
+                backgroundColor: ['#00E676', '#FFC107', '#FF6B35', '#FF3864'],
+                borderWidth: 0,
+                hoverOffset: 6,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '74%',
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: c => `${c.label}: ${c.raw} (${Math.round((c.raw / total) * 100)}%)`,
+                    },
+                },
+            },
+        },
+    });
+}
+
+// ── Top Machines Horizontal Bar ────────────────────────────────────────────
+function _renderTopMachinesBar(machines) {
+    const el = $('actTopMachinesBar');
+    if (!el) return;
+    if (!machines.length) {
+        el.innerHTML = '<div class="empty-state">No machine activity data</div>';
+        return;
+    }
+    const maxVal = Math.max(...machines.map(m => m.active_minutes), 1);
+    el.innerHTML = machines.slice(0, 7).map(m => {
+        const pct = Math.max(2, Math.round((m.active_minutes / maxVal) * 100));
+        return `<div class="act-bar-row">
+            <div class="act-bar-label" title="${m.machine}">${m.machine}</div>
+            <div class="act-bar-track"><div class="act-bar-fill" style="width:${pct}%"></div></div>
+            <div class="act-bar-val">${m.active_label || '—'}</div>
+        </div>`;
+    }).join('');
+}
+
+// ── Session Duration Analysis ──────────────────────────────────────────────
+function _renderSessionAnalysis(stats) {
+    const setTxt = (id, v) => { const el = $(id); if (el) el.textContent = v ?? '—'; };
+    setTxt('actSessAvg',     stats.avg_label     || '—');
+    setTxt('actSessLongest', stats.longest_label || '—');
+    setTxt('actSessTotal',   stats.total_sessions ?? 0);
+
+    const el = $('actSessionBuckets');
+    if (!el) return;
+    const buckets  = stats.buckets || [];
+    const maxCount = Math.max(...buckets.map(b => b.count), 1);
+    el.innerHTML = buckets.map(b => {
+        const h = Math.max(4, Math.round((b.count / maxCount) * 80));
+        return `<div class="act-session-bar-wrap">
+            <div class="act-session-bar" style="height:${h}px" title="${b.label}: ${b.count} sessions"></div>
+            <div class="act-session-label">${b.label}</div>
+        </div>`;
+    }).join('');
+}
+
+// ── Heatmap ────────────────────────────────────────────────────────────────
+function _renderHeatmap(heatmap) {
+    const el    = $('actHeatmapGrid');
+    if (!el) return;
+    const rows  = heatmap.rows  || [];
+    const hours = heatmap.hours || Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+
+    if (!rows.length) {
+        el.innerHTML = '<div class="empty-state">No heatmap data for selected range</div>';
+        return;
+    }
+
+    const maxCount = Math.max(...rows.flatMap(r => r.counts || []), 1);
+    const _col = count => {
+        if (!count) return '#0d1a24';
+        const r = count / maxCount;
+        return `rgba(30,144,255,${(0.1 + r * 0.75).toFixed(2)})`;
+    };
+
+    let html = `<div class="act-heatmap-hours">
+        <div class="act-heatmap-row-label"></div>
+        ${hours.map(h => `<div class="act-heatmap-hour">${h}</div>`).join('')}
+    </div>`;
+    rows.forEach(row => {
+        html += `<div class="act-heatmap-row">
+            <div class="act-heatmap-row-label" title="${row.machine}">${row.machine}</div>
+            ${(row.counts || []).map((count, i) =>
+                `<div class="act-heatmap-cell" style="background:${_col(count)}" title="${row.machine} ${hours[i]}:00 — ${count} events"></div>`
+            ).join('')}
+        </div>`;
+    });
+    el.innerHTML = html;
+}
+
+// ── User Activity Timeline ─────────────────────────────────────────────────
+function _renderTimeline(timeline) {
+    const rowsEl  = $('actTimelineRows');
+    const ticksEl = $('actTimelineTicks');
+    if (!rowsEl) return;
+
+    const users      = timeline.users  || [];
+    const ticks      = timeline.ticks  || [];
+    const startMs    = timeline.range_start ? new Date(timeline.range_start).getTime() : 0;
+    const endMs      = timeline.range_end   ? new Date(timeline.range_end).getTime()   : Date.now();
+    const spanMs     = Math.max(endMs - startMs, 1);
+
+    if (!users.length) {
+        rowsEl.innerHTML = '<div class="empty-state">No timeline data for selected range</div>';
+        return;
+    }
+
+    if (ticksEl && ticks.length) {
+        ticksEl.innerHTML = ticks.map(t =>
+            `<div class="act-tl-tick" style="left:${t.offset}%">${t.label}</div>`
+        ).join('');
+    }
+
+    const _stateColor = s => ({
+        active:  'rgba(0,230,118,0.4)',
+        idle:    'rgba(255,193,7,0.45)',
+        locked:  'rgba(255,107,53,0.5)',
+        offline: 'rgba(255,56,100,0.3)',
+    }[s] || 'rgba(100,120,140,0.3)');
+
+    rowsEl.innerHTML = users.map(u => {
+        const blocks = (u.segments || []).map(seg => {
+            const s = new Date(seg.start).getTime();
+            const e = new Date(seg.end).getTime();
+            const left  = Math.max(0, Math.min(100, ((s - startMs) / spanMs) * 100));
+            const width = Math.max(0.5, Math.min(100 - left, ((e - s) / spanMs) * 100));
+            const startLbl = (seg.start || '').slice(11, 16);
+            const endLbl   = (seg.end   || '').slice(11, 16);
+            return `<div class="act-tl-block" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%;background:${_stateColor(seg.state)}" title="${u.username} — ${seg.state}: ${startLbl}→${endLbl}"></div>`;
+        }).join('');
+        return `<div class="act-tl-user">
+            <div class="act-tl-name" title="${u.username}">${u.username}</div>
+            <div class="act-tl-track">${blocks}</div>
+        </div>`;
+    }).join('');
+}
+
+// ── Login Time Distribution Bar Chart ─────────────────────────────────────
+function _renderLoginDistChart(distribution) {
+    _destroyChart('actLoginDistChart');
+    const ctx = document.getElementById('actLoginDistChart');
+    if (!ctx) return;
+
+    const labels = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`);
+    const values = Array.isArray(distribution)
+        ? distribution
+        : Array.from({ length: 24 }, (_, i) => (distribution[i] || 0));
+
+    // No login events yet — show placeholder instead of empty axes
+    if (!values.some(v => v > 0)) {
+        const wrap = ctx.parentElement;
+        if (wrap) wrap.innerHTML = '<div class="empty-state" style="height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;"><span style="font-size:22px;opacity:0.3;">🕐</span><span style="color:var(--text-3);font-size:11px;">No login events in selected period</span></div>';
+        return;
+    }
+
+    _charts.actLoginDistChart = new Chart(ctx, {
         type: 'bar',
         data: {
-            labels: sorted.map(x => x[0]),
+            labels,
             datasets: [{
-                label: 'Usage Time',
-                data:  sorted.map(x => x[1]),
-                backgroundColor: 'rgba(70, 51, 255, 0.8)',
-                borderRadius: 5, borderWidth: 0, barThickness: 15
-            }]
+                label: 'Logins',
+                data: values,
+                backgroundColor: 'rgba(0,229,255,0.55)',
+                borderColor: '#00e5ff',
+                borderWidth: 1,
+                borderRadius: 3,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { display: false } },
+            scales: {
+                x: {
+                    grid: { color: 'rgba(31,53,66,0.7)' },
+                    ticks: { color: '#7A8C9A', font: { size: 9 }, maxRotation: 45 },
+                },
+                y: {
+                    min: 0,
+                    grid: { color: 'rgba(31,53,66,0.7)' },
+                    ticks: { color: '#7A8C9A', font: { size: 10 }, precision: 0 },
+                },
+            },
+        },
+    });
+}
+
+// ── Application Usage Donut ────────────────────────────────────────────────
+function _renderAppDonut(apps) {
+    _destroyChart('actAppDonutChart');
+    const ctx    = document.getElementById('actAppDonutChart');
+    const legend = $('actAppDonutLegend');
+
+    if (!apps.length) {
+        const msg = '<div class="empty-state" style="font-size:11px;padding:12px 0;">No app tracking data yet.<br><span style="color:var(--text-3);">Requires APP_USAGE events from agent.</span></div>';
+        if (legend) legend.innerHTML = msg;
+        // Hide the canvas so it doesn't show as a blank grey box
+        if (ctx) ctx.style.display = 'none';
+        return;
+    }
+    // Ensure canvas is visible when data arrives later
+    if (ctx) ctx.style.display = '';
+
+    const COLORS = ['#00e5ff', '#00ff9d', '#FFC107', '#FF6B35', '#A855F7', '#FF3864', '#00B8D9', '#64748B'];
+    const labels = apps.map(a => a.process_name);
+    const values = apps.map(a => a.total_seconds);
+    const total  = values.reduce((s, v) => s + v, 0) || 1;
+
+    if (legend) {
+        legend.innerHTML = apps.map((a, i) =>
+            `<div class="act-app-legend-item">
+                <span style="display:flex;align-items:center;gap:6px;">
+                    <span style="width:8px;height:8px;border-radius:2px;background:${COLORS[i % COLORS.length]};flex-shrink:0;"></span>
+                    <span style="color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px;" title="${a.process_name}">${a.process_name}</span>
+                </span>
+                <span style="color:var(--text-3);">${a.pct}%</span>
+            </div>`
+        ).join('');
+    }
+
+    if (!ctx) return;
+    _charts.actAppDonutChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            labels,
+            datasets: [{
+                data: values,
+                backgroundColor: COLORS.slice(0, apps.length),
+                borderWidth: 0,
+                hoverOffset: 6,
+            }],
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            cutout: '70%',
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: c => `${c.label}: ${Math.round((c.raw / total) * 100)}%`,
+                    },
+                },
+            },
+        },
+    });
+}
+
+// ── User Productivity Stacked Horizontal Bar ───────────────────────────────
+function _renderProductivityChart(users) {
+    _destroyChart('actProductivityChart');
+    const ctx = document.getElementById('actProductivityChart');
+    if (!ctx) return;
+    if (!users.length) {
+        const wrap = ctx.parentElement;
+        if (wrap) wrap.innerHTML = '<div class="empty-state" style="height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:6px;"><span style="font-size:22px;opacity:0.3;">📊</span><span style="color:var(--text-3);font-size:11px;">No session data for selected period</span></div>';
+        return;
+    }
+
+    const labels     = users.map(u => u.username);
+    const activeData = users.map(u => Math.round(u.active_mins));
+    const idleData   = users.map(u => Math.round(u.idle_mins));
+    const lockData   = users.map(u => Math.round(u.lock_mins));
+
+    _charts.actProductivityChart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels,
+            datasets: [
+                { label: 'Active', data: activeData, backgroundColor: 'rgba(0,230,118,0.65)',  stack: 'time' },
+                { label: 'Idle',   data: idleData,   backgroundColor: 'rgba(255,193,7,0.65)',  stack: 'time' },
+                { label: 'Locked', data: lockData,   backgroundColor: 'rgba(255,107,53,0.65)', stack: 'time' },
+            ],
         },
         options: {
             indexAxis: 'y',
@@ -146,540 +559,417 @@ export function renderAppUsageBarChart(labelMap) {
             maintainAspectRatio: false,
             plugins: {
                 legend: { display: false },
-                tooltip: { callbacks: { label: c => `Focus Time: ${formatIdle(c.raw)}` } }
+                tooltip: {
+                    callbacks: {
+                        afterBody: items => {
+                            const u = users[items[0].dataIndex];
+                            return u ? [`Score: ${u.productivity_score}%`] : [];
+                        },
+                    },
+                },
             },
             scales: {
-                x: { display: false, grid: { display: false } },
-                y: { grid: { display: false }, ticks: { color: 'var(--text-3)', font: { size: 11 } } }
-            }
-        }
+                x: {
+                    stacked: true,
+                    grid: { color: 'rgba(31,53,66,0.7)' },
+                    ticks: { color: '#7A8C9A', font: { size: 10 } },
+                    title: { display: true, text: 'Minutes', color: '#7A8C9A', font: { size: 10 } },
+                },
+                y: {
+                    stacked: true,
+                    grid: { display: false },
+                    ticks: { color: '#9FB6C8', font: { size: 11 } },
+                },
+            },
+        },
     });
 }
 
-export async function loadActivity(page = 1) {
+// ── Auto-refresh Timer ─────────────────────────────────────────────────────
+function _startAutoRefresh() {
+    if (_autoRefreshTimer) clearInterval(_autoRefreshTimer);
+    _autoRefreshCountdown = 60;
+    _autoRefreshTimer = setInterval(() => {
+        _autoRefreshCountdown--;
+        const el = $('actRefreshSecs');
+        if (el) el.textContent = _autoRefreshCountdown;
+        if (_autoRefreshCountdown <= 0) {
+            _autoRefreshCountdown = 60;
+            _refreshDashboard();
+            _loadEventTable(_evtPage);
+        }
+    }, 1000);
+}
+
+export function stopActivityAutoRefresh() {
+    if (_autoRefreshTimer) { clearInterval(_autoRefreshTimer); _autoRefreshTimer = null; }
+}
+
+// ── Event Feed Table ───────────────────────────────────────────────────────
+async function _loadEventTable(page = 1) {
+    const f  = _getFilters();
+    const qs = _toQS({
+        machine:   f.machine,
+        username:  f.username,
+        event:     f.event_type,
+        synced:    f.synced,
+        search:    f.search,
+        date_from: f.date_from,
+        date_to:   f.date_to,
+        page,
+        limit: 20,
+    });
     try {
-        activityPage = page;
-        let url = `/api/v1/activity?page=${activityPage}&limit=${activityLimit}`;
-        const filters = activityFilters();
-        if (filters.device) url += `&device_id=${encodeURIComponent(filters.device)}`;
-        if (filters.username) url += `&username=${encodeURIComponent(filters.username)}`;
-        if (filters.department) url += `&department=${encodeURIComponent(filters.department)}`;
-        if (filters.application) url += `&process_name=${encodeURIComponent(filters.application)}`;
-        if (filters.activity_state) url += `&activity_state=${encodeURIComponent(filters.activity_state)}`;
-        if (filters.search) url += `&search=${encodeURIComponent(filters.search)}`;
-        const df = filters.date_from;
-        const dt = filters.date_to;
-        if (df) url += `&date_from=${encodeURIComponent(df)}`;
-        if (dt) url += `&date_to=${encodeURIComponent(dt)}`;
+        const data     = await api('GET', `/api/activity/events?${qs}`);
+        _evtPage       = data.page  || page;
+        _evtTotalPages = data.pages || 1;
+        const events   = data.events || [];
+        const total    = data.total  || 0;
 
-        const data  = await api('GET', url);
-        const items = data.items || [];
-        _lastActivityItems = items;
-        const total = data.total || 0;
-
-        // Stats & Charts
-        let statsUrl = `/api/v1/activity/stats?`;
-        if (filters.device) statsUrl += `device_id=${encodeURIComponent(filters.device)}&`;
-        if (filters.username) statsUrl += `username=${encodeURIComponent(filters.username)}&`;
-        if (filters.department) statsUrl += `department=${encodeURIComponent(filters.department)}&`;
-        if (filters.application) statsUrl += `process_name=${encodeURIComponent(filters.application)}&`;
-        if (filters.activity_state) statsUrl += `activity_state=${encodeURIComponent(filters.activity_state)}&`;
-        let statsDf = df;
-        if (!statsDf) {
-            const yesterday = new Date();
-            yesterday.setHours(yesterday.getHours() - 24);
-            statsDf = yesterday.toISOString();
-        }
-        statsUrl += `date_from=${encodeURIComponent(statsDf)}&`;
-        if (dt) statsUrl += `date_to=${encodeURIComponent(dt)}&`;
-
-        try {
-            const stats      = await api('GET', statsUrl);
-            const idleSec    = stats.total_idle_seconds || 0;
-            const deviceCount= stats.device_count || 1;
-            const labelMap   = stats.process_distribution || {};
-
-            let activeSec = 0;
-            for (const [proc, sec] of Object.entries(labelMap)) {
-                if (proc.toLowerCase() !== 'idle') activeSec += sec;
+        const tbody = $('actEventTableBody');
+        if (tbody) {
+            if (!events.length) {
+                tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">No events match the current filters.</div></td></tr>`;
+            } else {
+                tbody.innerHTML = events.map(ev => {
+                    const syncBadge = ev.synced
+                        ? `<span style="color:#00E676;font-size:11px;">✔ Synced</span>`
+                        : `<span style="color:#FF6B35;font-size:11px;">⏳ Pending</span>`;
+                    return `<tr>
+                        <td style="color:var(--text-2);font-size:11px;white-space:nowrap;">${_fmtTime(ev.timestamp)}</td>
+                        <td style="color:var(--accent);">${ev.username || '—'}</td>
+                        <td><span class="machine-tag">${ev.machine || '—'}</span></td>
+                        <td style="color:var(--text-3);font-size:11px;">${ev.serial || '—'}</td>
+                        <td>${_eventBadge(ev.event)}</td>
+                        <td style="color:var(--text-2);">${ev.duration || '—'}</td>
+                        <td style="color:var(--text-3);font-size:11px;">${ev.ip_address || '—'}</td>
+                        <td>${syncBadge}</td>
+                    </tr>`;
+                }).join('');
             }
-
-            if ($('statIdleTime'))   $('statIdleTime').textContent   = formatIdle(idleSec);
-            if ($('statActiveTime')) $('statActiveTime').textContent  = formatIdle(activeSec);
-
-            const dcEl = $('activityDeviceCount');
-            if (dcEl) {
-                if (deviceCount > 1) {
-                    dcEl.textContent     = `${deviceCount} Devices`;
-                    dcEl.style.display   = 'inline-block';
-                } else {
-                    dcEl.style.display   = 'none';
-                }
-            }
-
-            renderStatusRing(activeSec, idleSec);
-            renderAppUsageBarChart(labelMap);
-
-            const detailsBody = document.getElementById('activityDetailsBody');
-            if (detailsBody) {
-                const groupedApps = Object.entries(labelMap)
-                    .filter(([p]) => p.toLowerCase() !== 'idle')
-                    .sort((a, b) => b[1] - a[1]);
-
-                if (groupedApps.length === 0) {
-                    detailsBody.innerHTML = '<tr><td colspan="3"><div class="empty-state">No app activity recorded.</div></td></tr>';
-                } else {
-                    const windowMap = {};
-                    items.forEach(it => {
-                        const p = it.process_name || 'Unknown';
-                        if (!windowMap[p]) windowMap[p] = new Set();
-                        if (it.window_title) windowMap[p].add(it.window_title);
-                    });
-                    detailsBody.innerHTML = groupedApps.map(([proc, sec]) => {
-                        const titles     = Array.from(windowMap[proc] || []).slice(0, 3).join(', ');
-                        const titlesDisp = titles ? `<small style="color:var(--text-3)">${escapeHtml(titles)}</small>` : '—';
-                        return `<tr>
-                            <td><strong>${escapeHtml(proc)}</strong></td>
-                            <td>${titlesDisp}</td>
-                            <td><span class="badge badge-info">${formatIdle(sec)}</span></td>
-                        </tr>`;
-                    }).join('');
-                }
-            }
-        } catch (e) {
-            console.error('Stats fetching failed', e);
         }
 
-        const limit    = data.limit || activityLimit;
-        const pageResp = data.page  || activityPage;
-        activityTotalPages = Math.max(1, Math.ceil(total / limit));
-        activityPage       = pageResp;
-
-        if ($('activityTotal'))      $('activityTotal').textContent      = `${total} events`;
-        if ($('activityPageNumber')) $('activityPageNumber').textContent = String(activityPage);
-
-        const tbody = $('activityTableBody');
-        if (!tbody) return;
-
-        if (items.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><span class="ei">📭</span>No activity yet</div></td></tr>`;
-        } else {
-            tbody.innerHTML = items.map(i => {
-                const idle       = formatIdle(i.idle_seconds);
-                const inputTxt   = `${i.click_count || 0}c / ${i.keypress_count || 0}k`;
-                const deviceObj  = (_deviceCache || []).find(x => x.id === i.device_id);
-                const deviceLabel= deviceObj ? deviceObj.hostname : (i.device_id || '');
-                const userLabel  = i.username ? escapeHtml(i.username) : '<span style="color:var(--text-3)">—</span>';
-                return `<tr>
-                    <td>${formatDate(i.timestamp)}</td>
-                    <td>${escapeHtml(deviceLabel)}</td>
-                    <td>${userLabel}</td>
-                    <td>${escapeHtml(i.window_title  || '—')}</td>
-                    <td>${escapeHtml(i.process_name  || '—')}</td>
-                    <td>${idle}</td>
-                    <td>${inputTxt}</td>
-                </tr>`;
-            }).join('');
-        }
-
-        if ($('activityPageInfo')) {
-            const startIdx = total === 0 ? 0 : ((activityPage - 1) * limit) + 1;
-            const endIdx   = Math.min(activityPage * limit, total);
-            $('activityPageInfo').textContent = `${startIdx}-${endIdx} of ${total} results`;
-        }
-
-        if ($('btnActivityPrev')) $('btnActivityPrev').disabled = activityPage <= 1;
-        if ($('btnActivityNext')) $('btnActivityNext').disabled = activityPage >= activityTotalPages;
-
-        // Live auto-refresh
-        if (!window._activityRefreshInterval) {
-            window._activityRefreshInterval = setInterval(() => {
-                const view = document.getElementById('view-activity');
-                if (view && view.style.display !== 'none') {
-                    loadActivity(activityPage);
-                }
-            }, 30000);
-        }
+        const info = $('actEvtPageInfo');
+        if (info) info.textContent = `${total} total · page ${_evtPage} of ${_evtTotalPages}`;
+        const prev = $('actEvtPrev'); if (prev) prev.disabled = _evtPage <= 1;
+        const next = $('actEvtNext'); if (next) next.disabled = _evtPage >= _evtTotalPages;
     } catch (err) {
-        const tbody = $('activityTableBody');
-        if (tbody) tbody.innerHTML = `<tr><td colspan="7"><div class="empty-state"><span class="ei">⚠️</span>${err.message || 'Failed to load activity'}</div></td></tr>`;
+        const tbody = $('actEventTableBody');
+        if (tbody) tbody.innerHTML = `<tr><td colspan="8"><div class="empty-state">⚠️ ${err.message || 'Failed to load events'}</div></td></tr>`;
     }
 }
 
-export function activityPrevPage() { if (activityPage > 1) loadActivity(activityPage - 1); }
-export function activityNextPage() { if (activityPage < activityTotalPages) loadActivity(activityPage + 1); }
+function _eventBadge(evt) {
+    const map = {
+        LOGIN:      ['rgba(0,230,118,0.15)',  '#00E676'],
+        LOGOUT:     ['rgba(255,56,100,0.15)', '#FF3864'],
+        LOCK:       ['rgba(255,107,53,0.15)', '#FF6B35'],
+        UNLOCK:     ['rgba(30,144,255,0.15)', '#1E90FF'],
+        IDLE:       ['rgba(255,193,7,0.15)',  '#FFC107'],
+        ACTIVE:     ['rgba(0,230,118,0.1)',   '#00C963'],
+        STARTUP:    ['rgba(130,80,255,0.15)', '#A855F7'],
+        SHUTDOWN:   ['rgba(255,56,100,0.18)', '#FF6080'],
+        SCREEN_OFF: ['rgba(60,80,100,0.25)',  '#8899AA'],
+        SCREEN_ON:  ['rgba(30,144,255,0.1)',  '#66D9EE'],
+        APP_USAGE:  ['rgba(0,229,255,0.12)',  '#00e5ff'],
+    };
+    const [bg, color] = map[evt] || ['rgba(100,120,140,0.15)', '#9FB6C8'];
+    return `<span style="background:${bg};color:${color};border:1px solid ${color}44;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600;letter-spacing:0.04em;">${evt || '—'}</span>`;
+}
 
-export async function loadActivityUsers() {
+function _fmtTime(iso) {
+    if (!iso) return '—';
     try {
-        const device = $('activityDevice')?.value;
-        let url = '/api/v1/activity/users';
-        if (device) url += `?device_id=${encodeURIComponent(device)}`;
-        const data = await api('GET', url);
-        const sel  = $('activityUser');
-        if (!sel) return;
-        const current = sel.value;
-        sel.innerHTML = '<option value="">All users</option>';
-        (data.users || []).forEach(u => {
-            const opt   = document.createElement('option');
-            opt.value   = u;
-            opt.textContent = u;
-            sel.appendChild(opt);
+        return new Date(iso).toLocaleString('en-GB', {
+            day: '2-digit', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
         });
-        if (current) sel.value = current;
-    } catch (e) {
-        console.warn('loadActivityUsers failed', e);
-    }
+    } catch { return iso; }
 }
 
-export async function loadDeviceSummary() {
-    const tbody   = $('deviceSummaryBody');
-    const countEl = $('deviceSummaryCount');
-    if (!tbody) return;
+// ── Filter Dropdowns ───────────────────────────────────────────────────────
+async function _populateDropdowns() {
     try {
-        const data    = await api('GET', '/api/v1/activity/device-summary');
-        const devices = data.devices || [];
-        if (countEl) countEl.textContent = `${devices.length} device${devices.length !== 1 ? 's' : ''}`;
-        if (devices.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state">No device activity data</div></td></tr>';
-            return;
-        }
-        tbody.innerHTML = devices.map(d => {
-            const riskColor = d.risk_score >= 70 ? 'var(--danger)' : d.risk_score >= 40 ? 'var(--warning)' : 'var(--success)';
-            const users     = d.users && d.users.length ? d.users.join(', ') : '—';
-            return `<tr>
-                <td><strong>${escapeHtml(d.hostname || d.device_id)}</strong></td>
-                <td><span class="badge badge-completed">${formatIdle(d.active_seconds)}</span></td>
-                <td><span style="color:var(--warning)">${formatIdle(d.idle_seconds)}</span></td>
-                <td title="${escapeHtml(users)}">${d.user_count} user${d.user_count !== 1 ? 's' : ''} <small style="color:var(--text-3);">(${escapeHtml(users.length > 40 ? users.slice(0,40)+'…' : users)})</small></td>
-                <td>${escapeHtml(d.top_app || '—')}</td>
-                <td>${d.total_clicks || 0} / ${d.total_keypresses || 0}</td>
-                <td><span style="font-weight:700; color:${riskColor}">${d.risk_score}</span>/100</td>
-            </tr>`;
-        }).join('');
-    } catch (e) {
-        if (tbody) tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state">Error loading device summary</div></td></tr>';
-    }
-}
-
-export async function loadHourlyHeatmap() {
-    const container = $('hourlyHeatmap');
-    const label     = $('heatmapDeviceLabel');
-    if (!container) return;
-    try {
-        const device   = $('activityDevice')?.value;
-        let url = '/api/v1/activity/hourly';
-        if (device) url += `?device_id=${encodeURIComponent(device)}`;
-        const username = $('activityUser')?.value;
-        if (username) url += (device ? '&' : '?') + `username=${encodeURIComponent(username)}`;
-        if (label) label.textContent = device ? '(device filtered)' : '(all devices)';
-
-        const data    = await api('GET', url);
-        const buckets = data.hourly || [];
-        const maxActive = Math.max(...buckets.map(b => b.active_seconds), 1);
-
-        container.innerHTML = buckets.map(b => {
-            const ratio     = b.active_seconds / maxActive;
-            const idleRatio = b.events > 0 ? (b.idle_seconds / (b.active_seconds + b.idle_seconds)) : 1;
-            let bg = '#ecf0f1';
-            if (b.events > 0) {
-                bg = idleRatio > 0.7 ? '#f39c12' : ratio > 0.6 ? '#27ae60' : ratio > 0.3 ? '#2ecc71' : '#f0faf3';
+        const [mRes, uRes, pRes] = await Promise.allSettled([
+            api('GET', '/api/activity/machines'),
+            api('GET', '/api/activity/users'),
+            api('GET', '/api/activity/processes'),
+        ]);
+        if (mRes.status === 'fulfilled') {
+            const sel = $('actMachine');
+            if (sel) {
+                const cur = sel.value;
+                sel.innerHTML = '<option value="">All Machines</option>';
+                (mRes.value.machines || []).forEach(m => {
+                    const o = document.createElement('option');
+                    o.value = m; o.textContent = m; sel.appendChild(o);
+                });
+                if (cur) sel.value = cur;
             }
-            const tip = `Hour ${b.hour}:00 — Active: ${formatIdle(b.active_seconds)}, Idle: ${formatIdle(b.idle_seconds)}, Events: ${b.events}`;
-            return `<div title="${escapeHtml(tip)}" style="
-                background:${bg}; border-radius:4px; height:48px;
-                display:flex; flex-direction:column; align-items:center; justify-content:center;
-                font-size:10px; color:${b.events > 0 ? '#fff' : 'var(--text-3)'};
-                cursor:default; transition:transform 0.15s;
-            " onmouseover="this.style.transform='scale(1.1)'" onmouseout="this.style.transform=''">
-                <span>${b.hour}h</span>
-            </div>`;
-        }).join('');
-    } catch (e) {
-        if (container) container.innerHTML = '<div style="color:var(--text-3); padding:10px;">Error loading heatmap</div>';
-    }
-}
-
-export async function loadUserSummary() {
-    const tbody   = $('userSummaryBody');
-    const countEl = $('userSummaryCount');
-    if (!tbody) return;
-    try {
-        const device = $('activityDevice')?.value;
-        let url = '/api/v1/activity/summary';
-        if (device) url += `?device_id=${encodeURIComponent(device)}`;
-        const data  = await api('GET', url);
-        const users = data.users || [];
-        if (countEl) countEl.textContent = `${users.length} user${users.length !== 1 ? 's' : ''}`;
-        if (users.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">No user activity data</div></td></tr>';
-            return;
         }
-        tbody.innerHTML = users.map(u => {
-            const topApps = (u.top_apps || []).slice(0, 3).map(a => escapeHtml(a.process)).join(', ') || '—';
-            return `<tr>
-                <td><strong>👤 ${escapeHtml(u.username)}</strong></td>
-                <td><span class="badge badge-completed">${formatIdle(u.active_seconds)}</span></td>
-                <td><span style="color:var(--warning)">${formatIdle(u.idle_seconds)}</span></td>
-                <td>${u.total_clicks     || 0}</td>
-                <td>${u.total_keypresses || 0}</td>
-                <td><small style="color:var(--text-3)">${topApps}</small></td>
-            </tr>`;
-        }).join('');
+        if (uRes.status === 'fulfilled') {
+            const sel = $('actUser');
+            if (sel) {
+                const cur = sel.value;
+                sel.innerHTML = '<option value="">All Users</option>';
+                (uRes.value.users || []).forEach(u => {
+                    const o = document.createElement('option');
+                    o.value = u; o.textContent = u; sel.appendChild(o);
+                });
+                if (cur) sel.value = cur;
+            }
+        }
+        if (pRes.status === 'fulfilled') {
+            const sel = $('actProcess');
+            if (sel) {
+                const cur = sel.value;
+                sel.innerHTML = '<option value="">All Apps</option>';
+                (pRes.value.processes || []).forEach(p => {
+                    const o = document.createElement('option');
+                    o.value = p; o.textContent = p; sel.appendChild(o);
+                });
+                if (cur) sel.value = cur;
+            }
+        }
     } catch (e) {
-        if (tbody) tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state">Error loading user summary</div></td></tr>';
+        console.warn('_populateDropdowns failed', e);
     }
 }
 
-// ── KPIs & Analytics (ECharts) ──────────────────────────────────────────────
+// ── Public: Period Tabs ────────────────────────────────────────────────────
+export function setActivityPeriod(period, el) {
+    _period = period;
+    document.querySelectorAll('.act-period-tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+    const cr = $('actCustomRange');
+    if (cr) cr.style.display = period === 'custom' ? 'flex' : 'none';
+    applyActivityFilters();
+}
+
+export function applyActivityCustomRange() {
+    _customFrom = $('actDateFrom')?.value || '';
+    _customTo   = $('actDateTo')?.value   || '';
+    applyActivityFilters();
+}
+
+// ── Public: Exported API (keeps dashboard.js compatibility) ────────────────
+export async function loadActivity(page = 1) {
+    _loadEventTable(page);
+    _refreshDashboard();
+}
+
+export async function loadActivityUsers() { /* handled via loadActivityFilters */ }
+export async function loadDeviceSummary() { /* included in analytics */ }
+export async function loadHourlyHeatmap() { /* included in analytics */ }
+export async function loadUserSummary()   { /* included in analytics */ }
+export function  loadSessionTable()       { /* included in analytics */ }
+
 export async function loadActivityKpis() {
+    // Lightweight: pull from /api/activity/kpi for KPI cards only
     try {
-        const f = activityFilters();
-        let url = '/api/v1/activity/kpis?';
-        if (f.device) url += `device_id=${encodeURIComponent(f.device)}&`;
-        if (f.username) url += `username=${encodeURIComponent(f.username)}&`;
-        if (f.date_from) url += `date_from=${encodeURIComponent(f.date_from)}&`;
-        if (f.date_to) url += `date_to=${encodeURIComponent(f.date_to)}&`;
-        const data = await api('GET', url);
-        const set = (id, val) => { const el = $(id); if (el) el.textContent = val; };
-        set('kpiActiveUsers', data.active_users ?? '—');
-        set('kpiLoggedToday', data.logged_in_today ?? '—');
-        set('kpiAvgLogin', formatHourLabel(data.avg_login_hour));
-        set('kpiAvgLogout', formatHourLabel(data.avg_logout_hour));
-        set('kpiAvgWork', data.avg_work_duration_hours ? `${data.avg_work_duration_hours}h` : '—');
-        set('kpiIdlePct', data.idle_percentage != null ? `${data.idle_percentage}%` : '—');
-        set('kpiProd', data.productivity_score != null ? `${data.productivity_score}%` : '—');
+        const data = await api('GET', '/api/activity/kpi');
+        _renderKPIs({
+            active:        data.active          ?? 0,
+            idle:          data.idle            ?? 0,
+            locked:        data.locked          ?? 0,
+            offline:       data.offline         ?? 0,
+            total_events:  data.total_events    ?? 0,
+            sync_health:   data.pending_count != null && data.total_events
+                           ? Math.round(((data.total_events - data.pending_count) / data.total_events) * 100)
+                           : 100,
+        });
     } catch (e) {
         console.warn('loadActivityKpis error', e);
     }
 }
 
 export async function loadAnalyticsCharts() {
-    try {
-        const f = activityFilters();
-        let url = '/api/v1/activity/analytics?';
-        if (f.device) url += `device_id=${encodeURIComponent(f.device)}&`;
-        if (f.username) url += `username=${encodeURIComponent(f.username)}&`;
-        if (f.department) url += `department=${encodeURIComponent(f.department)}&`;
-        if (f.application) url += `process_name=${encodeURIComponent(f.application)}&`;
-        if (f.activity_state) url += `activity_state=${encodeURIComponent(f.activity_state)}&`;
-        if (f.date_from) url += `date_from=${encodeURIComponent(f.date_from)}&`;
-        if (f.date_to) url += `date_to=${encodeURIComponent(f.date_to)}&`;
-        const data = await api('GET', url);
-
-        renderLoginHistogram(data.login_histogram || [], data.logout_histogram || []);
-        renderTimelineChart(data.activity_series || {});
-        renderAppDonut(data.top_apps || [], data.other_apps_seconds || 0);
-        renderUserProductivity(data.per_user || []);
-        renderLockStatus(data.state_snapshot || {});
-    } catch (e) {
-        console.warn('loadAnalyticsCharts error', e);
-    }
+    await _refreshDashboard();
+    await _loadEventTable(_evtPage);
+    _startAutoRefresh();
 }
 
-function renderLoginHistogram(login_hist, logout_hist) {
-    const el = document.getElementById('chartLoginHistogram');
-    if (!el || !window.echarts) return;
-    const chart = echarts.init(el);
-    chart.setOption({
-        tooltip: { trigger: 'axis' },
-        legend: { data: ['Login', 'Logout'], textStyle: { color: '#ccc' } },
-        grid: { left: 40, right: 10, top: 30, bottom: 30 },
-        xAxis: { type: 'category', data: Array.from({length:24}, (_,i)=>`${i}:00`), axisLabel:{color:'#ccc'} },
-        yAxis: { type: 'value', axisLabel:{color:'#ccc'} },
-        series: [
-            { name:'Login', type:'bar', data: login_hist, itemStyle:{color:'#1E90FF'} },
-            { name:'Logout', type:'bar', data: logout_hist, itemStyle:{color:'#00E676'} }
-        ]
+export function applyActivityFilters() {
+    _refreshDashboard();
+    _loadEventTable(1);
+}
+
+export function resetActivityFilters() {
+    ['actMachine', 'actUser', 'actEventType', 'actSynced', 'actSearch', 'actProcess'].forEach(id => {
+        const el = $(id); if (el) el.value = '';
     });
+    _period = 'daily';
+    document.querySelectorAll('.act-period-tab').forEach((t, i) => t.classList.toggle('active', i === 0));
+    const cr = $('actCustomRange'); if (cr) cr.style.display = 'none';
+    applyActivityFilters();
 }
 
-function renderTimelineChart(series) {
-    const el = document.getElementById('chartTimeline');
-    if (!el || !window.echarts) return;
-    const chart = echarts.init(el);
-    chart.setOption({
-        tooltip: { trigger: 'axis' },
-        legend: { data:['Active','Idle','Locked'], textStyle:{color:'#ccc'} },
-        grid: { left: 40, right: 10, top: 30, bottom: 30 },
-        xAxis: { type:'category', data: series.labels || [], axisLabel:{color:'#ccc'} },
-        yAxis: { type:'value', axisLabel:{color:'#ccc'} },
-        dataZoom: [{ type:'inside' }, { type:'slider' }],
-        series: [
-            { name:'Active', type:'line', areaStyle:{opacity:0.3}, data: series.active || [], color:'#27ae60' },
-            { name:'Idle', type:'line', areaStyle:{opacity:0.2}, data: series.idle || [], color:'#f39c12' },
-            { name:'Locked', type:'line', areaStyle:{opacity:0.2}, data: series.locked || [], color:'#e67e22' },
-        ]
-    });
+export async function loadActivityFilters() {
+    await _populateDropdowns();
 }
 
-function renderAppDonut(topApps, otherSeconds) {
-    const el = document.getElementById('chartAppDonut');
-    if (!el || !window.echarts) return;
-    const chart = echarts.init(el);
-    const data = (topApps || []).map(a => ({ name:a.name, value:a.seconds }));
-    if (otherSeconds) data.push({ name:'Other', value: otherSeconds });
-    chart.setOption({
-        tooltip: { trigger:'item' },
-        series: [{
-            type:'pie',
-            radius:['45%','70%'],
-            data,
-            label: { color:'#ddd' }
-        }]
-    });
+export function activityPrevPage() {
+    if (_evtPage > 1) _loadEventTable(_evtPage - 1);
+}
+export function activityNextPage() {
+    if (_evtPage < _evtTotalPages) _loadEventTable(_evtPage + 1);
 }
 
-function renderUserProductivity(perUser) {
-    const el = document.getElementById('chartUserProductivity');
-    if (!el || !window.echarts) return;
-    const chart = echarts.init(el);
-    const top = (perUser || []).slice(0,8);
-    chart.setOption({
-        tooltip:{ trigger:'axis' },
-        legend:{ data:['Active','Idle','Locked'], textStyle:{color:'#ccc'} },
-        grid:{ left: 80, right: 20, top: 30, bottom: 30 },
-        xAxis:{ type:'value', axisLabel:{color:'#ccc'} },
-        yAxis:{ type:'category', data: top.map(u=>u.username), axisLabel:{color:'#ccc'} },
-        series:[
-            { name:'Active', type:'bar', stack:'t', data: top.map(u=>Math.round((u.active_seconds||0)/60)), itemStyle:{color:'#27ae60'} },
-            { name:'Idle', type:'bar', stack:'t', data: top.map(u=>Math.round((u.idle_seconds||0)/60)), itemStyle:{color:'#f39c12'} },
-            { name:'Locked', type:'bar', stack:'t', data: top.map(u=>Math.round((u.locked_seconds||0)/60)), itemStyle:{color:'#e67e22'} },
-        ]
-    });
-}
-
-function renderLockStatus(snapshot) {
-    const list = document.getElementById('lockStatusList');
-    if (!list) return;
-    const colors = { active:'green', idle:'gold', locked:'orange', offline:'red' };
-    list.innerHTML = '';
-    Object.entries(snapshot).forEach(([state, count]) => {
-        const li = document.createElement('li');
-        const dot = document.createElement('span');
-        dot.className = 'status-dot';
-        dot.style.background = colors[state] || 'gray';
-        li.appendChild(dot);
-        li.appendChild(document.createTextNode(`${state}: ${count}`));
-        list.appendChild(li);
-    });
-}
-
-// ── Sessions table (DataTables server-side) ──────────────────────────────────
-export function loadSessionTable(forceReload = false) {
-    const f = activityFilters();
-    const baseUrl = '/api/v1/activity/sessions';
-    const params = new URLSearchParams();
-    if (f.device) params.append('device_id', f.device);
-    if (f.username) params.append('username', f.username);
-    if (f.department) params.append('department', f.department);
-    if (f.application) params.append('process_name', f.application);
-    if (f.activity_state) params.append('activity_state', f.activity_state);
-    if (f.date_from) params.append('date_from', f.date_from);
-    if (f.date_to) params.append('date_to', f.date_to);
-    if (f.min_duration) params.append('min_duration', f.min_duration);
-
-    if (!sessionTable) {
-        sessionTable = window.jQuery && window.jQuery('#sessionTable').DataTable({
-            processing: true,
-            serverSide: true,
-            searching: true,
-            ajax: function (data, callback) {
-                const fullParams = new URLSearchParams(params.toString());
-                fullParams.append('draw', data.draw);
-                fullParams.append('start', data.start);
-                fullParams.append('length', data.length);
-                if (data.search && data.search.value) fullParams.append('search[value]', data.search.value);
-                if (data.order && data.order.length) {
-                    fullParams.append('order[0][column]', data.order[0].column);
-                    fullParams.append('order[0][dir]', data.order[0].dir);
-                }
-                api('GET', `${baseUrl}?${fullParams.toString()}`)
-                    .then(json => callback(json))
-                    .catch(err => {
-                        console.warn('session table load failed', err);
-                        callback({ draw: data.draw, recordsTotal:0, recordsFiltered:0, data:[] });
-                    });
-            },
-            columns: [
-                { data:'user' },
-                { data:'device' },
-                { data:'login' },
-                { data:'logout' },
-                { data:'active' },
-                { data:'idle' },
-                { data:'lock_count' },
-                { data:'productivity' },
-            ]
-        });
-    } else if (forceReload) {
-        sessionTable.ajax.reload();
-    }
-}
 export function exportActivityCSV() {
-    if (!_lastActivityItems || _lastActivityItems.length === 0) {
-        toast('No activity data to export. Apply filters first.', 'info');
+    const f  = _getFilters();
+    const qs = _toQS({ machine: f.machine, username: f.username, event: f.event_type, synced: f.synced, search: f.search, date_from: f.date_from, date_to: f.date_to, format: 'csv', limit: 10000 });
+    window.location.href = `/api/activity/events?${qs}`;
+}
+
+export function exportActivityXLSX() {
+    const f  = _getFilters();
+    const qs = _toQS({ machine: f.machine, username: f.username, event: f.event_type, synced: f.synced, search: f.search, date_from: f.date_from, date_to: f.date_to, format: 'xlsx', limit: 10000 });
+    window.location.href = `/api/activity/events?${qs}`;
+}
+
+// ── PDF Export ────────────────────────────────────────────────────────────
+export async function exportActivityPDF() {
+    if (typeof window.jspdf === 'undefined') {
+        alert('PDF library not loaded. Please refresh the page.');
         return;
     }
-    const escCsv = v => {
-        if (v == null) return '';
-        const s = String(v);
-        return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
-    };
-    const cols = ['Timestamp', 'Device', 'Username', 'Window Title', 'Process', 'Idle (s)', 'Clicks', 'Keypresses'];
-    const rows = _lastActivityItems.map(i =>
-        [i.timestamp, i.device_id, i.username, i.window_title, i.process_name, i.idle_seconds, i.click_count, i.keypress_count]
-        .map(escCsv).join(',')
-    );
-    const csv  = [cols.join(','), ...rows].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement('a');
-    a.href     = url;
-    a.download = `activity_export_${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    toast(`Exported ${_lastActivityItems.length} rows to CSV`, 'success');
+    const f   = _getFilters();
+    const qs  = _toQS({ machine: f.machine, username: f.username, date_from: f.date_from, date_to: f.date_to });
+    const qs2 = _toQS({ machine: f.machine, username: f.username, event: f.event_type, synced: f.synced, search: f.search, date_from: f.date_from, date_to: f.date_to, limit: 200 });
+
+    const [analyticsRes, appRes, eventsRes] = await Promise.allSettled([
+        api('GET', `/api/activity/analytics?${qs}`),
+        api('GET', `/api/activity/app-usage?${qs}`),
+        api('GET', `/api/activity/events?${qs2}`),
+    ]);
+
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+    // Header band
+    doc.setFillColor(8, 12, 16);
+    doc.rect(0, 0, 210, 28, 'F');
+    doc.setTextColor(0, 229, 255);
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'bold');
+    doc.text('SentraGuard — Activity Report', 14, 16);
+    doc.setTextColor(107, 143, 168);
+    doc.setFontSize(9);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`Generated: ${new Date().toLocaleString()}`, 14, 24);
+
+    let y = 36;
+
+    // KPI summary
+    if (analyticsRes.status === 'fulfilled') {
+        const kpis = analyticsRes.value.kpis || {};
+        doc.autoTable({
+            startY: y,
+            head: [['Metric', 'Value']],
+            body: [
+                ['Active Machines',  kpis.active        ?? '—'],
+                ['Idle Machines',    kpis.idle          ?? '—'],
+                ['Locked Machines',  kpis.locked        ?? '—'],
+                ['Offline Devices',  kpis.offline       ?? '—'],
+                ['Total Events',     kpis.total_events  ?? '—'],
+                ['Sync Health',      kpis.sync_health != null ? `${kpis.sync_health}%` : '—'],
+            ],
+            theme: 'grid',
+            headStyles: { fillColor: [8, 12, 16], textColor: [0, 229, 255], fontSize: 10 },
+            bodyStyles: { fontSize: 10 },
+        });
+        y = doc.lastAutoTable.finalY + 10;
+    }
+
+    // App usage
+    if (appRes.status === 'fulfilled') {
+        const apps = appRes.value.app_breakdown || [];
+        if (apps.length) {
+            doc.autoTable({
+                startY: y,
+                head: [['Application', 'Time (s)', 'Share']],
+                body: apps.map(a => [a.process_name, a.total_seconds, `${a.pct}%`]),
+                theme: 'grid',
+                headStyles: { fillColor: [8, 12, 16], textColor: [0, 229, 255], fontSize: 10 },
+                bodyStyles: { fontSize: 10 },
+            });
+            y = doc.lastAutoTable.finalY + 10;
+        }
+        // Productivity
+        const prod = appRes.value.productivity_by_user || [];
+        if (prod.length) {
+            doc.autoTable({
+                startY: y,
+                head: [['User', 'Active (min)', 'Idle (min)', 'Locked (min)', 'Score']],
+                body: prod.map(u => [u.username, u.active_mins, u.idle_mins, u.lock_mins, `${u.productivity_score}%`]),
+                theme: 'grid',
+                headStyles: { fillColor: [8, 12, 16], textColor: [0, 229, 255], fontSize: 10 },
+                bodyStyles: { fontSize: 10 },
+            });
+            y = doc.lastAutoTable.finalY + 10;
+        }
+    }
+
+    // Event log sample
+    if (eventsRes.status === 'fulfilled') {
+        const evts = eventsRes.value.events || [];
+        if (evts.length) {
+            doc.autoTable({
+                startY: y,
+                head: [['Timestamp', 'User', 'Machine', 'Event', 'Duration', 'Synced']],
+                body: evts.slice(0, 100).map(e => [
+                    _fmtTime(e.timestamp), e.username || '—', e.machine || '—',
+                    e.event, e.duration || '—', e.synced ? 'Yes' : 'No',
+                ]),
+                theme: 'striped',
+                headStyles: { fillColor: [8, 12, 16], textColor: [0, 229, 255], fontSize: 9 },
+                bodyStyles: { fontSize: 8 },
+            });
+        }
+    }
+
+    doc.save(`sentraguard-activity-${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
-export async function generateActivityReport() {
-    try {
-        const type = $('reportType')?.value || 'daily_activity';
-        const fmt  = $('reportFormat')?.value || 'csv';
-        const f = activityFilters();
-        const payload = {
-            type,
-            format: fmt,
-            device_id: f.device || null,
-            username: f.username || null,
-            department: f.department || null,
-            process_name: f.application || null,
-            activity_state: f.activity_state || null,
-            date_from: f.date_from,
-            date_to: f.date_to,
-            min_duration: f.min_duration ? parseInt(f.min_duration, 10) : null,
-        };
-        const res = await fetch('/api/v1/activity/reports', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload),
-        });
-        if (!res.ok) throw new Error(`Report failed (${res.status})`);
-        const blob = await res.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `activity_report.${fmt}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        const stat = $('reportStatus');
-        if (stat) stat.textContent = 'Report downloaded';
-    } catch (e) {
-        const stat = $('reportStatus');
-        if (stat) stat.textContent = 'Report failed';
-        toast(e.message || 'Report generation failed', 'error');
+// ── Report Modal ──────────────────────────────────────────────────────────
+export async function generateReport(type) {
+    const status = $('reportGenStatus');
+    if (status) status.textContent = 'Generating report…';
+
+    // Apply preset filters for report type
+    const evtSel = $('actEventType');
+    if (type === 'app_usage' && evtSel) evtSel.value = 'APP_USAGE';
+    else if (type === 'idle' && evtSel) evtSel.value = 'IDLE';
+    else if (evtSel) evtSel.value = '';
+
+    if (type === 'daily') {
+        _period = 'daily';
+        document.querySelectorAll('.act-period-tab').forEach((t, i) => t.classList.toggle('active', i === 0));
+    } else if (type === 'monthly') {
+        _period = 'monthly';
+        document.querySelectorAll('.act-period-tab').forEach((t, i) => t.classList.toggle('active', i === 2));
     }
+
+    try {
+        await exportActivityPDF();
+        if (status) status.textContent = '✔ PDF downloaded.';
+    } catch (e) {
+        if (status) status.textContent = `⚠ ${e.message || 'Export failed'}`;
+    }
+    setTimeout(() => { if (status) status.textContent = ''; }, 4000);
 }
+
+export function openReportPanel() {
+    const m = $('reportPanelModal');
+    if (m) m.classList.add('active');
+}
+
+export function closeReportPanel() {
+    const m = $('reportPanelModal');
+    if (m) m.classList.remove('active');
+}
+
+// Stubs for backward compat
+export function renderStatusRing()      { /* legacy — no-op */ }
+export function renderAppUsageBarChart(){ /* legacy — no-op */ }
+export async function generateActivityReport() { /* legacy — no-op */ }

@@ -11,6 +11,8 @@ if sys.platform == 'win32':
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 import json
+import io
+import csv
 import threading
 import time
 import secrets
@@ -23,14 +25,13 @@ from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, status, Request, UploadFile, File, Form  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.staticfiles import StaticFiles  # type: ignore
-from fastapi.responses import FileResponse  # type: ignore
+from fastapi.responses import FileResponse, StreamingResponse  # type: ignore
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm  # type: ignore
 from pydantic import BaseModel  # type: ignore
 from sqlalchemy.orm import Session  # type: ignore
 from jose import JWTError, jwt  # type: ignore
-from passlib.context import CryptContext  # type: ignore
-
-from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware, ActivityLog, UninstallPassword, AgentVersion  # type: ignore
+from passlib.context import CryptContext # type: ignore
+from models import SessionLocal, Device, Command, AdminSnapshot, EventLog, NotificationCampaign, User, InstalledSoftware, UninstallPassword, AgentVersion, ActivityEvent  # type: ignore
 
 # ── WebSocket Manager for Real-Time Terminal ───────────────────────────────────
 
@@ -185,6 +186,10 @@ async def require_admin(current_user: User = Depends(get_current_user)):
 
 app = FastAPI(title="Admin Control System", version="1.0.0")
 
+# ── Feature Routers ────────────────────────────────────────────────────────
+from activity_service import activity_router  # type: ignore
+app.include_router(activity_router)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -261,20 +266,6 @@ class SoftwareInventoryPayload(BaseModel):
     device_id: str
     items: list[InstalledSoftwareItem]
 
-
-class ActivityEntry(BaseModel):
-    timestamp: Optional[str] = None  # ISO-8601
-    window_title: Optional[str] = None
-    process_name: Optional[str] = None
-    username: Optional[str] = None
-    idle_seconds: Optional[int] = 0
-    click_count: Optional[int] = 0
-    keypress_count: Optional[int] = 0
-
-
-class ActivityPayload(BaseModel):
-    device_id: str
-    activities: list[ActivityEntry]
 
 
 class GenerateUninstallRequest(BaseModel):
@@ -390,6 +381,452 @@ def list_devices(db: Session = Depends(get_db), current_user: User = Depends(get
             "is_uninstalled": bool(d.is_uninstalled),
         }
         for d in devices
+    ]
+
+
+# ── API: Command Queue (Agent ↔ Server) ────────────────────────────────────
+
+@app.post("/send_command")
+def send_command(
+    req: SendCommandRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Portal queues a command for an agent to pick up."""
+    device = db.query(Device).filter(Device.id == req.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    expires_at = None
+    if req.expires_at:
+        try:
+            expires_at = datetime.fromisoformat(req.expires_at.replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    cmd = Command(
+        device_id=req.device_id,
+        action=req.action,
+        username=req.username,
+        payload=req.payload,
+        status="pending",
+        expires_at=expires_at,
+    )
+    db.add(cmd)
+    db.commit()
+    db.refresh(cmd)
+    return {"message": "Command queued", "command_id": cmd.id}
+
+
+@app.get("/get_command/{device_id}")
+def get_command(
+    device_id: str,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
+    """Agent polls for the next pending command."""
+    # Update last_seen
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    device.last_seen = datetime.now(timezone.utc)
+
+    # Auto-revoke any expired grants
+    now = datetime.now(timezone.utc)
+    expired = db.query(Command).filter(
+        Command.device_id == device_id,
+        Command.action == "grant",
+        Command.status == "completed",
+        Command.auto_revoked == False,
+        Command.expires_at != None,
+        Command.expires_at <= now,
+    ).all()
+    for exp in expired:
+        revoke = Command(
+            device_id=device_id,
+            action="revoke",
+            username=exp.username,
+            status="pending",
+        )
+        db.add(revoke)
+        exp.auto_revoked = True
+    if expired:
+        db.commit()
+
+    cmd = db.query(Command).filter(
+        Command.device_id == device_id,
+        Command.status == "pending",
+    ).order_by(Command.created_at.asc()).first()
+
+    db.commit()
+
+    if not cmd:
+        return {"command": None}
+
+    cmd.status = "executing"
+    cmd.executed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(cmd)
+
+    return {
+        "command": {
+            "id": cmd.id,
+            "action": cmd.action,
+            "username": cmd.username,
+            "payload": cmd.payload,
+        }
+    }
+
+
+@app.post("/command_result")
+def command_result(
+    req: CommandResultRequest,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
+    """Agent reports the result of a command."""
+    cmd = db.query(Command).filter(Command.id == req.command_id).first()
+    if not cmd:
+        raise HTTPException(status_code=404, detail="Command not found")
+
+    cmd.status = req.status
+    cmd.result = req.result
+
+    if req.admin_list is not None:
+        snapshot = AdminSnapshot(
+            device_id=cmd.device_id,
+            admin_users=json.dumps(req.admin_list),
+        )
+        db.add(snapshot)
+
+    db.commit()
+    return {"message": "Result recorded"}
+
+
+@app.get("/commands/history")
+def get_command_history(
+    limit: int = 20,
+    page: int = 1,
+    sort_by: str = "created_at",
+    sort_dir: str = "desc",
+    device_id: Optional[str] = None,
+    action: Optional[str] = None,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Paginated command history for all or specific devices."""
+    query = db.query(Command)
+    if device_id:
+        query = query.filter(Command.device_id == device_id)
+    if action:
+        query = query.filter(Command.action == action)
+    if search:
+        query = query.filter(
+            (Command.username.ilike(f"%{search}%")) |
+            (Command.payload.ilike(f"%{search}%")) |
+            (Command.result.ilike(f"%{search}%"))
+        )
+
+    total = query.count()
+    
+    order_col = getattr(Command, sort_by, Command.created_at)
+    if sort_dir == "asc":
+        query = query.order_by(order_col.asc())
+    else:
+        query = query.order_by(order_col.desc())
+        
+    offset = (page - 1) * limit
+    cmds = query.offset(offset).limit(limit).all()
+
+    return {
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "pages": max(1, (total + limit - 1) // limit),
+        "commands": [
+            {
+                "id": c.id,
+                "device_id": c.device_id,
+                "action": c.action,
+                "username": c.username,
+                "payload": c.payload,
+                "status": c.status,
+                "result": c.result,
+                "created_at": c.created_at.isoformat(timespec="milliseconds") + "Z" if c.created_at else None,
+                "executed_at": c.executed_at.isoformat(timespec="milliseconds") + "Z" if c.executed_at else None,
+            }
+            for c in cmds
+        ]
+    }
+
+
+@app.get("/commands/{device_id}")
+def get_commands(
+    device_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return command history for a device."""
+    cmds = (
+        db.query(Command)
+        .filter(Command.device_id == device_id)
+        .order_by(Command.created_at.desc())
+        .limit(200)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "action": c.action,
+            "username": c.username,
+            "payload": c.payload,
+            "status": c.status,
+            "result": c.result,
+            "created_at": c.created_at.isoformat(timespec="milliseconds") + "Z" if c.created_at else None,
+            "executed_at": c.executed_at.isoformat(timespec="milliseconds") + "Z" if c.executed_at else None,
+            "expires_at": c.expires_at.isoformat(timespec="milliseconds") + "Z" if c.expires_at else None,
+            "auto_revoked": c.auto_revoked,
+        }
+        for c in cmds
+    ]
+
+
+@app.get("/commands")
+def get_all_commands(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return recent command history across all devices."""
+    cmds = (
+        db.query(Command)
+        .order_by(Command.created_at.desc())
+        .limit(500)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "device_id": c.device_id,
+            "action": c.action,
+            "username": c.username,
+            "payload": c.payload,
+            "status": c.status,
+            "result": c.result,
+            "created_at": c.created_at.isoformat(timespec="milliseconds") + "Z" if c.created_at else None,
+            "executed_at": c.executed_at.isoformat(timespec="milliseconds") + "Z" if c.executed_at else None,
+            "expires_at": c.expires_at.isoformat(timespec="milliseconds") + "Z" if c.expires_at else None,
+            "auto_revoked": c.auto_revoked,
+        }
+        for c in cmds
+    ]
+
+
+# ── API: Event Logs ─────────────────────────────────────────────────────────
+
+class EventLogPayload(BaseModel):
+    device_id: str
+    logs: list[dict]
+
+@app.post("/api/v1/device/logs")
+def ingest_event_logs(
+    payload: EventLogPayload,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
+    """Receive event logs batch from agent."""
+    device = db.query(Device).filter(Device.id == payload.device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+
+    now = datetime.now(timezone.utc)
+    rows = []
+    for entry in payload.logs:
+        # Accept both old and new field naming conventions from agents
+        ts_raw = entry.get("timestamp") or entry.get("occurred_at")
+        try:
+            ts = datetime.fromisoformat(str(ts_raw).replace("Z", "+00:00")) if ts_raw else now
+        except Exception:
+            ts = now
+
+        rows.append(EventLog(
+            device_id=payload.device_id,
+            hostname=entry.get("hostname") or device.hostname,
+            username=entry.get("username"),
+            event_id=entry.get("event_id") or 0,
+            event_name=entry.get("event_name") or entry.get("source", "unknown"),
+            log_source=entry.get("log_source") or entry.get("log_channel", "System"),
+            message=(entry.get("message") or "")[:4096],
+            timestamp=ts,
+            created_at=now,
+        ))
+    if rows:
+        db.bulk_save_objects(rows)
+    db.commit()
+    return {"status": "ok", "count": len(rows)}
+
+
+@app.get("/api/v1/device/{device_id}/logs")
+def get_device_logs(
+    device_id: str,
+    limit: int = 200,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return event logs for a device."""
+    logs = (
+        db.query(EventLog)
+        .filter(EventLog.device_id == device_id)
+        .order_by(EventLog.timestamp.desc())
+        .limit(limit)
+        .all()
+    )
+    return [
+        {
+            "id": l.id,
+            "event_id": l.event_id,
+            "event_name": l.event_name,
+            "log_source": l.log_source,
+            "hostname": l.hostname,
+            "username": l.username,
+            "message": l.message,
+            "timestamp": l.timestamp.isoformat(timespec="milliseconds") + "Z" if l.timestamp else None,
+        }
+        for l in logs
+    ]
+
+
+# ── API: Notifications ──────────────────────────────────────────────────────
+
+# ── API: Notifications ──────────────────────────────────────────────────────
+
+class NotificationPayload(BaseModel):
+    device_ids: list[str]               # support multiple targets
+    message: str
+    title: Optional[str] = "SentraGuard"
+    target_users: Optional[list[str]] = ["All"]
+    is_recurring: Optional[bool] = False
+    start_time: Optional[str] = None    # ISO string; None = send immediately
+    end_time: Optional[str] = None
+    interval_minutes: Optional[int] = None
+
+
+@app.post("/api/v1/notifications")
+def send_notification(
+    payload: NotificationPayload,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Queue a notification or create a recurring campaign for one or more devices."""
+    now = datetime.now(timezone.utc)
+    ids = []
+
+    for device_id in payload.device_ids:
+        device = db.query(Device).filter(Device.id == device_id).first()
+        if not device:
+            continue  # skip unknown devices
+
+        if payload.is_recurring:
+            # Recurring campaign — store in notification_campaigns table
+            st = datetime.fromisoformat(payload.start_time.replace("Z", "+00:00")) if payload.start_time else now
+            et = datetime.fromisoformat(payload.end_time.replace("Z", "+00:00")) if payload.end_time else None
+            campaign = NotificationCampaign(
+                device_id=device_id,
+                title=payload.title or "SentraGuard",
+                message=payload.message,
+                target_users=json.dumps(payload.target_users or ["All"]),
+                start_time=st,
+                end_time=et,
+                interval_minutes=payload.interval_minutes or 5,
+                is_active=True,
+            )
+            db.add(campaign)
+            db.flush()
+            ids.append(campaign.id)
+        else:
+            # One-time — queue a notify Command so the agent picks it up on next poll
+            cmd = Command(
+                device_id=device_id,
+                action="notify",
+                payload=json.dumps({"message": payload.message, "title": payload.title or "SentraGuard"}),
+                status="pending",
+            )
+            db.add(cmd)
+            db.flush()
+            ids.append(cmd.id)
+
+    db.commit()
+    return {"status": "queued", "count": len(ids), "ids": ids}
+
+
+@app.get("/notifications/{device_id}")
+def get_notifications_agent(
+    device_id: str,
+    db: Session = Depends(get_db),
+    agent_auth: None = Depends(require_agent_token),
+):
+    """Agent polls for pending recurring notification campaigns."""
+    now = datetime.now(timezone.utc)
+    active = (
+        db.query(NotificationCampaign)
+        .filter(
+            NotificationCampaign.device_id == device_id,
+            NotificationCampaign.is_active == True,
+            NotificationCampaign.end_time > now,
+        )
+        .all()
+    )
+
+    due = []
+    for n in active:
+        if n.start_time and n.start_time > now:
+            continue  # Not started yet
+        interval_td = timedelta(minutes=n.interval_minutes or 5)
+        if n.last_sent is None or (now - n.last_sent) >= interval_td:
+            due.append(n)
+            n.last_sent = now
+
+    db.commit()
+    return [{"id": n.id, "message": n.message, "title": n.title or "SentraGuard"} for n in due]
+
+
+@app.delete("/api/v1/notifications/{campaign_id}")
+def cancel_campaign(
+    campaign_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Deactivate a recurring campaign."""
+    c = db.query(NotificationCampaign).filter(NotificationCampaign.id == campaign_id).first()
+    if not c:
+        raise HTTPException(status_code=404, detail="Campaign not found")
+    c.is_active = False
+    db.commit()
+    return {"status": "cancelled", "id": campaign_id}
+
+
+# ── API: Admin Snapshots ────────────────────────────────────────────────────
+
+@app.get("/admin_snapshots/{device_id}")
+def get_admin_snapshots(
+    device_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    snapshots = (
+        db.query(AdminSnapshot)
+        .filter(AdminSnapshot.device_id == device_id)
+        .order_by(AdminSnapshot.captured_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        {
+            "id": s.id,
+            "admin_users": json.loads(s.admin_users) if s.admin_users else [],
+            "captured_at": s.captured_at.isoformat(timespec="milliseconds") + "Z" if s.captured_at else None,
+        }
+        for s in snapshots
     ]
 
 
@@ -668,550 +1105,168 @@ def get_device_software(
     }
 
 
-@app.post("/api/v1/activity")
-def ingest_activity(
-    payload: ActivityPayload,
-    db: Session = Depends(get_db),
-    agent_auth: None = Depends(require_agent_token),
-):
-    """Agent posts sampled user activity telemetry."""
-    device = db.query(Device).filter(Device.id == payload.device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
+# ── API: Portal — Event Log Viewer ──────────────────────────────────────────
 
-    rows = []
-    now_utc = datetime.now(timezone.utc)
-    for entry in payload.activities:
-        try:
-            ts = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00")) if entry.timestamp else now_utc
-        except Exception:
-            ts = now_utc
-
-        rows.append(
-            ActivityLog(
-                device_id=payload.device_id,
-                timestamp=ts,
-                window_title=(entry.window_title or "")[:1024],
-                process_name=(entry.process_name or "")[:260],
-                username=(entry.username or "")[:255],
-                idle_seconds=entry.idle_seconds or 0,
-                click_count=entry.click_count or 0,
-                keypress_count=entry.keypress_count or 0,
-            )
-        )
-
-    if rows:
-        db.bulk_save_objects(rows)
-        db.commit()
-    return {"status": "ok", "inserted": len(rows)}
-
-
-@app.get("/api/v1/activity")
-def get_activity(
+@app.get("/api/v1/event-logs")
+def list_event_logs(
+    limit: int = 20,
     page: int = 1,
-    limit: int = 50,
+    sort_by: str = "timestamp",
+    sort_dir: str = "desc",
     device_id: Optional[str] = None,
-    username: Optional[str] = None,
+    log_source: Optional[str] = None,
+    event_id: Optional[int] = None,
     search: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Paginated user activity stream for the portal."""
-    page = max(page, 1)
-    limit = max(1, min(limit, 200))
-
-    query = db.query(ActivityLog)
+    """Paginated event log viewer for portal."""
+    query = db.query(EventLog)
     if device_id:
-        query = query.filter(ActivityLog.device_id == device_id)
-    if username:
-        query = query.filter(ActivityLog.username == username)
+        query = query.filter(EventLog.device_id == device_id)
+    if log_source:
+        query = query.filter(EventLog.log_source == log_source)
+    if event_id:
+        query = query.filter(EventLog.event_id == event_id)
     if search:
-        pattern = f"%{search}%"
         query = query.filter(
-            (ActivityLog.window_title.ilike(pattern)) |
-            (ActivityLog.process_name.ilike(pattern))
+            (EventLog.message.ilike(f"%{search}%")) |
+            (EventLog.event_name.ilike(f"%{search}%")) |
+            (EventLog.username.ilike(f"%{search}%"))
         )
-    if date_from:
-        try:
-            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp >= df)
-        except Exception:
-            pass
-    if date_to:
-        try:
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp <= dt)
-        except Exception:
-            pass
 
     total = query.count()
-    items = (
-        query.order_by(ActivityLog.timestamp.desc())
-        .offset((page - 1) * limit)
-        .limit(limit)
-        .all()
-    )
+
+    # Map sort column names to actual model attributes
+    sort_col_map = {
+        "timestamp": EventLog.timestamp,
+        "hostname": EventLog.hostname,
+        "username": EventLog.username,
+        "event_id": EventLog.event_id,
+        "event_name": EventLog.event_name,
+        "log_source": EventLog.log_source,
+    }
+    order_col = sort_col_map.get(sort_by, EventLog.timestamp)
+    if sort_dir == "asc":
+        query = query.order_by(order_col.asc())
+    else:
+        query = query.order_by(order_col.desc())
+
+    offset = (page - 1) * limit
+    logs = query.offset(offset).limit(limit).all()
 
     return {
+        "total": total,
         "page": page,
         "limit": limit,
-        "total": total,
-        "items": [
+        "pages": max(1, (total + limit - 1) // limit),
+        "logs": [
             {
-                "id": a.id,
-                "device_id": a.device_id,
-                "timestamp": a.timestamp.isoformat(timespec='milliseconds') + "Z" if a.timestamp else None,
-                "window_title": a.window_title,
-                "process_name": a.process_name,
-                "username": a.username,
-                "idle_seconds": a.idle_seconds,
-                "click_count": a.click_count,
-                "keypress_count": a.keypress_count,
+                "id": l.id,
+                "device_id": l.device_id,
+                "hostname": l.hostname or "",
+                "username": l.username or "",
+                "event_id": l.event_id or 0,
+                "event_name": l.event_name or "",
+                "log_source": l.log_source or "",
+                "message": l.message or "",
+                "timestamp": l.timestamp.isoformat(timespec="milliseconds") + "Z" if l.timestamp else None,
             }
-            for a in items
+            for l in logs
         ],
     }
 
 
-from sqlalchemy import func
-
-
-def _apply_activity_filters(query, device_id, username, date_from, date_to):
-    """Reusable helper to apply standard filters to an ActivityLog query."""
-    if device_id:
-        query = query.filter(ActivityLog.device_id == device_id)
-    if username:
-        query = query.filter(ActivityLog.username == username)
-    if date_from:
-        try:
-            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp >= df)
-        except Exception:
-            pass
-    if date_to:
-        try:
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp <= dt)
-        except Exception:
-            pass
-    return query
-
-
-@app.get("/api/v1/activity/users")
-def get_activity_users(
-    device_id: Optional[str] = None,
+@app.get("/api/v1/event-logs/summary")
+def event_logs_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return all unique usernames seen in activity logs (optionally filtered by device)."""
-    query = db.query(func.distinct(ActivityLog.username)).filter(ActivityLog.username != None)
-    if device_id:
-        query = query.filter(ActivityLog.device_id == device_id)
-    users = [row[0] for row in query.all() if row[0]]
-    return {"users": sorted(users), "count": len(users)}
+    """Summary stats for the event log viewer — matches dashboard KPI cards."""
+    try:
+        total = db.query(EventLog).count()
+
+        # Login events (Windows Security event_name values)
+        login_names = ["logon", "logon_explicit", "logon_network", "logon_batch", "logon_service"]
+        logins = db.query(EventLog).filter(EventLog.event_name.in_(login_names)).count()
+
+        # Log-off events
+        logoff_names = ["logoff", "logon_type_logoff"]
+        logoffs = db.query(EventLog).filter(EventLog.event_name.in_(logoff_names)).count()
+
+        # Crash / error events
+        crash_names = ["app_crash", "unexpected_shutdown", "error_reporting", "app_hang",
+                       "driver_init_failure", "disk_controller_error", "disk_error"]
+        crashes = db.query(EventLog).filter(EventLog.event_name.in_(crash_names)).count()
+
+        # Privilege escalation events
+        priv_names = ["priv_use", "priv_service_op", "user_added_to_priv_group",
+                      "user_removed_from_priv_group", "account_changed"]
+        privilege_events = db.query(EventLog).filter(EventLog.event_name.in_(priv_names)).count()
+
+        return {
+            "total_events": total,
+            "logins": logins,
+            "logoffs": logoffs,
+            "crashes": crashes,
+            "privilege_events": privilege_events,
+        }
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error("event_logs_summary error: %s", exc)
+        return {"total_events": 0, "logins": 0, "logoffs": 0, "crashes": 0, "privilege_events": 0}
 
 
-@app.get("/api/v1/activity/stats")
-def get_activity_stats(
-    device_id: Optional[str] = None,
-    username: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Aggregate statistics: idle/active split, app distribution, user distribution, risk score."""
-    query = db.query(ActivityLog)
-    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
+# ── API: Portal — Notifications viewer ──────────────────────────────────────
 
-    all_logs = query.all()
-    device_ids = set()
-    total_idle = 0
-    apps: dict = {}
-    users: dict = {}
-    after_hours_active = 0
-    total_active = 0
-    input_bursts = 0
-
-    for log_entry in all_logs:
-        device_ids.add(log_entry.device_id)
-        log_idle = min(15, log_entry.idle_seconds or 0)
-        total_idle += log_idle
-
-        proc = log_entry.process_name or "Unknown"
-        uname = log_entry.username or "Unknown"
-
-        if log_idle < 15:
-            active_portion = 15 - log_idle
-            total_active += active_portion
-            apps[proc] = apps.get(proc, 0) + active_portion
-            users[uname] = users.get(uname, 0) + active_portion
-            if log_entry.timestamp:
-                try:
-                    # Translate to local timezone for logical binning
-                    local_ts = log_entry.timestamp.replace(tzinfo=timezone.utc).astimezone()
-                    hour = local_ts.hour
-                    if hour < 8 or hour >= 20:
-                        after_hours_active += active_portion
-                except Exception:
-                    pass
-
-        # Detect input burst (>50 keys or clicks in one 15s sample)
-        total_input = (log_entry.click_count or 0) + (log_entry.keypress_count or 0)
-        if total_input > 50:
-            input_bursts += 1
-
-    total_logged = len(all_logs)
-    # Risk score (0-100): weighted combo of after-hours ratio + burst ratio
-    after_hours_ratio = (after_hours_active / total_active) if total_active > 0 else 0
-    burst_ratio = (input_bursts / total_logged) if total_logged > 0 else 0
-    risk_score = min(100, int((after_hours_ratio * 60) + (burst_ratio * 40)))
-
-    return {
-        "total_idle_seconds": int(total_idle),
-        "total_active_seconds": int(total_active),
-        "total_duration_seconds": total_logged * 15,
-        "device_count": len(device_ids),
-        "process_distribution": apps,
-        "user_distribution": users,
-        "after_hours_active_seconds": int(after_hours_active),
-        "risk_score": risk_score,
-    }
-
-
-@app.get("/api/v1/activity/summary")
-def get_activity_summary(
-    device_id: Optional[str] = None,
-    username: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Per-user summary: active/idle time, top apps, interaction counts."""
-    query = db.query(ActivityLog)
-    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
-    all_logs = query.all()
-
-    # user_data: {username -> {active_s, idle_s, clicks, keys, apps: {proc: s}}}
-    user_data: dict = {}
-    for log_entry in all_logs:
-        uname = log_entry.username or "Unknown"
-        if uname not in user_data:
-            user_data[uname] = {
-                "username": uname,
-                "active_seconds": 0,
-                "idle_seconds": 0,
-                "total_clicks": 0,
-                "total_keypresses": 0,
-                "apps": {},
-            }
-        d = user_data[uname]
-        log_idle = min(15, log_entry.idle_seconds or 0)
-        active = 15 - log_idle
-        d["active_seconds"] += active
-        d["idle_seconds"] += log_idle
-        d["total_clicks"] += log_entry.click_count or 0
-        d["total_keypresses"] += log_entry.keypress_count or 0
-        proc = log_entry.process_name or "Unknown"
-        if active > 0:
-            d["apps"][proc] = d["apps"].get(proc, 0) + active
-
-    summaries = []
-    for d in user_data.values():
-        top_apps = sorted(d["apps"].items(), key=lambda x: x[1], reverse=True)[:5]
-        summaries.append({
-            "username": d["username"],
-            "active_seconds": d["active_seconds"],
-            "idle_seconds": d["idle_seconds"],
-            "total_clicks": d["total_clicks"],
-            "total_keypresses": d["total_keypresses"],
-            "top_apps": [{"process": p, "seconds": s} for p, s in top_apps],
-        })
-
-    summaries.sort(key=lambda x: x["active_seconds"], reverse=True)
-    return {"count": len(summaries), "users": summaries}
-
-
-@app.get("/api/v1/activity/top-apps")
-def get_top_apps(
-    device_id: Optional[str] = None,
-    username: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    limit: int = 10,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Top N applications by active time (seconds). Optionally scoped to device/user."""
-    query = db.query(ActivityLog)
-    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
-    all_logs = query.all()
-
-    apps: dict = {}
-    for log_entry in all_logs:
-        log_idle = min(15, log_entry.idle_seconds or 0)
-        active = 15 - log_idle
-        if active > 0:
-            proc = log_entry.process_name or "Unknown"
-            apps[proc] = apps.get(proc, 0) + active
-
-    sorted_apps = sorted(apps.items(), key=lambda x: x[1], reverse=True)[:max(1, limit)]
-    return {
-        "top_apps": [
-            {"process": p, "active_seconds": s, "active_minutes": round(s / 60, 1)}
-            for p, s in sorted_apps
-        ]
-    }
-
-
-@app.get("/api/v1/activity/hourly")
-def get_activity_hourly(
-    device_id: Optional[str] = None,
-    username: Optional[str] = None,
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Hourly breakdown (hour 0-23) of active/idle seconds for heatmap visualisation."""
-    query = db.query(ActivityLog)
-    query = _apply_activity_filters(query, device_id, username, date_from, date_to)
-    all_logs = query.all()
-
-    buckets = [{"hour": h, "active_seconds": 0, "idle_seconds": 0, "events": 0} for h in range(24)]
-    for log_entry in all_logs:
-        if not log_entry.timestamp:
-            continue
-        try:
-            local_ts = log_entry.timestamp.replace(tzinfo=timezone.utc).astimezone()
-            hour = local_ts.hour
-        except Exception:
-            hour = log_entry.timestamp.hour
-
-        log_idle = min(15, log_entry.idle_seconds or 0)
-        buckets[hour]["idle_seconds"] += log_idle
-        buckets[hour]["active_seconds"] += (15 - log_idle)
-        buckets[hour]["events"] += 1
-
-    return {"hourly": buckets}
-
-
-@app.get("/api/v1/activity/device-summary")
-def get_device_activity_summary(
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Device-wise activity summary: active/idle time, unique users, top app, risk score per device."""
-    query = db.query(ActivityLog)
-    if date_from:
-        try:
-            df = datetime.fromisoformat(date_from.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp >= df)
-        except Exception:
-            pass
-    if date_to:
-        try:
-            dt = datetime.fromisoformat(date_to.replace("Z", "+00:00"))
-            query = query.filter(ActivityLog.timestamp <= dt)
-        except Exception:
-            pass
-
-    all_logs = query.all()
-
-    # device_data: {device_id -> {active_s, idle_s, users, apps, input_bursts, after_hours_active}}
-    device_data: dict = {}
-    for log_entry in all_logs:
-        did = log_entry.device_id
-        if did not in device_data:
-            device_data[did] = {
-                "device_id": did,
-                "active_seconds": 0,
-                "idle_seconds": 0,
-                "users": set(),
-                "apps": {},
-                "input_bursts": 0,
-                "after_hours_active": 0,
-                "total_clicks": 0,
-                "total_keypresses": 0,
-            }
-        d = device_data[did]
-        log_idle = min(15, log_entry.idle_seconds or 0)
-        active = 15 - log_idle
-        d["active_seconds"] += active
-        d["idle_seconds"] += log_idle
-        d["total_clicks"] += log_entry.click_count or 0
-        d["total_keypresses"] += log_entry.keypress_count or 0
-        if log_entry.username:
-            d["users"].add(log_entry.username)
-        if active > 0:
-            proc = log_entry.process_name or "Unknown"
-            d["apps"][proc] = d["apps"].get(proc, 0) + active
-            if log_entry.timestamp:
-                try:
-                    local_ts = log_entry.timestamp.replace(tzinfo=timezone.utc).astimezone()
-                    hour = local_ts.hour
-                    if hour < 8 or hour >= 20:
-                        d["after_hours_active"] += active
-                except Exception:
-                    pass
-        total_input = (log_entry.click_count or 0) + (log_entry.keypress_count or 0)
-        if total_input > 50:
-            d["input_bursts"] += 1
-
-    # Enrich with hostname and compute risk score
-    all_devices = {dev.id: dev.hostname for dev in db.query(Device).all()}
-
-    result = []
-    for did, d in device_data.items():
-        total_active = d["active_seconds"]
-        after_hours_ratio = (d["after_hours_active"] / total_active) if total_active > 0 else 0
-        total_events = (d["active_seconds"] + d["idle_seconds"]) // 15 or 1
-        burst_ratio = d["input_bursts"] / total_events
-        risk_score = min(100, int((after_hours_ratio * 60) + (burst_ratio * 40)))
-
-        top_app = max(d["apps"].items(), key=lambda x: x[1])[0] if d["apps"] else "—"
-        result.append({
-            "device_id": did,
-            "hostname": all_devices.get(did, did),
-            "active_seconds": d["active_seconds"],
-            "idle_seconds": d["idle_seconds"],
-            "active_minutes": round(d["active_seconds"] / 60, 1),
-            "user_count": len(d["users"]),
-            "users": sorted(d["users"]),
-            "top_app": top_app,
-            "total_clicks": d["total_clicks"],
-            "total_keypresses": d["total_keypresses"],
-            "after_hours_active_seconds": d["after_hours_active"],
-            "risk_score": risk_score,
-        })
-
-    result.sort(key=lambda x: x["active_seconds"], reverse=True)
-    return {"count": len(result), "devices": result}
-
-
-# ── API: Command Queue ─────────────────────────────────────────────────────
-
-@app.post("/send_command")
-def send_command(req: SendCommandRequest, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    """Queue a command for a device."""
-    device = db.query(Device).filter(Device.id == req.device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    if req.action not in ("grant", "revoke", "check", "shell", "create_user", "notify", "get_bitlocker_key", "uninstall_software"):
-        raise HTTPException(status_code=400, detail="Action must be grant, revoke, check, shell, create_user, notify, get_bitlocker_key, or uninstall_software")
-
-    if req.action in ("grant", "revoke", "create_user") and not req.username:
-        raise HTTPException(status_code=400, detail="Username required for grant/revoke/create_user")
-
-    if req.action in ("shell", "create_user", "uninstall_software") and not req.payload:
-        raise HTTPException(status_code=400, detail="Payload (script, password, or uninstall data) required for this command type")
-
-    if req.action == "get_bitlocker_key" and not req.payload:
-        raise HTTPException(status_code=400, detail="Drive letter required for get_bitlocker_key (e.g. C:)")
-
-    # Parse optional expiry time
-    expires_at_dt = None
-    if req.expires_at:
-        try:
-            expires_at_dt = datetime.fromisoformat(req.expires_at.replace('Z', '+00:00')).replace(tzinfo=None)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid expires_at format. Use ISO-8601 e.g. 2026-03-14T18:30:00Z")
-
-    cmd = Command(
-        device_id=req.device_id,
-        action=req.action,
-        username=req.username,
-        payload=req.payload,
-        expires_at=expires_at_dt,
-    )
-    db.add(cmd)
-    db.commit()
-    db.refresh(cmd)
-    return {"message": "Command queued", "command_id": cmd.id}
-
-
-@app.get("/get_command/{device_id}")
-def get_command(
+@app.get("/api/v1/notifications/{device_id}")
+def get_device_notifications(
     device_id: str,
     db: Session = Depends(get_db),
-    agent_auth: None = Depends(require_agent_token),
+    current_user: User = Depends(get_current_user),
 ):
-    """Agent polls: return the oldest pending command for a device."""
-    
-    # Heartbeat: update last_seen
-    device = db.query(Device).filter(Device.id == device_id).first()
-    if device:
-        device.last_seen = datetime.now(timezone.utc)
-        db.commit()
-
-    cmd = (
-        db.query(Command)
-        .filter(Command.device_id == device_id, Command.status == "pending")
-        .order_by(Command.created_at)
-        .first()
-    )
-    if not cmd:
-        return {"command": None}
-
-    # Mark as executing so it isn't returned again
-    cmd.status = "executing"
-    db.commit()
-    db.refresh(cmd)
-
-    return {
-        "command": {
-            "id": cmd.id,
-            "action": cmd.action,
-            "username": cmd.username,
-            "payload": cmd.payload,
-        }
-    }
-
-
-@app.post("/command_result")
-def command_result(
-    req: CommandResultRequest,
-    db: Session = Depends(get_db),
-    agent_auth: None = Depends(require_agent_token),
-):
-    """Agent reports the result of a command execution."""
-    cmd = db.query(Command).filter(Command.id == req.command_id).first()
-    if not cmd:
-        raise HTTPException(status_code=404, detail="Command not found")
-
-    cmd.status = req.status
-    cmd.result = req.result
-    cmd.executed_at = datetime.now(timezone.utc)
-    
-    # Heartbeat: update last_seen
-    device = db.query(Device).filter(Device.id == cmd.device_id).first()
-    if device:
-        device.last_seen = datetime.now(timezone.utc)
-        
-    db.commit()
-
-    # If the agent sent back an admin list (from a 'check' action), save it
-    if req.admin_list is not None:
-        snapshot = AdminSnapshot(
-            device_id=cmd.device_id,
-            admin_users=json.dumps(req.admin_list),
+    """Return active notification campaigns for a device (portal view)."""
+    try:
+        campaigns = (
+            db.query(NotificationCampaign)
+            .filter(
+                NotificationCampaign.device_id == device_id,
+                NotificationCampaign.is_active == True,
+            )
+            .order_by(NotificationCampaign.created_at.desc())
+            .limit(50)
+            .all()
         )
-        db.add(snapshot)
-        db.commit()
+        return {
+            "campaigns": [
+                {
+                    "id": n.id,
+                    "message": n.message,
+                    "title": getattr(n, "title", None) or "SentraGuard",
+                    "target_users": json.loads(n.target_users) if getattr(n, "target_users", None) else ["All"],
+                    "interval_minutes": getattr(n, "interval_minutes", None) or 0,
+                    "start_time": n.start_time.isoformat(timespec="milliseconds") + "Z" if getattr(n, "start_time", None) else None,
+                    "end_time": n.end_time.isoformat(timespec="milliseconds") + "Z" if getattr(n, "end_time", None) else None,
+                    "is_active": n.is_active,
+                    "created_at": n.created_at.isoformat(timespec="milliseconds") + "Z" if n.created_at else None,
+                }
+                for n in campaigns
+            ]
+        }
+    except Exception as exc:
+        import logging as _log
+        _log.getLogger(__name__).error("get_device_notifications error: %s", exc)
+        return {"campaigns": []}
 
-    return {"message": "Result recorded"}
 
-
-# ── API: Admin List ─────────────────────────────────────────────────────────
+# ── API: Portal — Admin list ─────────────────────────────────────────────────
 
 @app.get("/admin_list/{device_id}")
-def get_admin_list(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def get_admin_list(
+    device_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Return the latest admin snapshot for a device."""
     snapshot = (
         db.query(AdminSnapshot)
@@ -1221,562 +1276,155 @@ def get_admin_list(device_id: str, db: Session = Depends(get_db), current_user: 
     )
     if not snapshot:
         return {"admin_users": [], "captured_at": None}
-
     return {
-        "admin_users": json.loads(snapshot.admin_users),
-        "captured_at": snapshot.captured_at.isoformat() if snapshot.captured_at else None,
+        "admin_users": json.loads(snapshot.admin_users) if snapshot.admin_users else [],
+        "captured_at": snapshot.captured_at.isoformat(timespec="milliseconds") + "Z" if snapshot.captured_at else None,
     }
 
 
-# ── API: Command History ────────────────────────────────────────────────────
+# ── API: Export Audit PDF/CSV ────────────────────────────────────────────────
 
-@app.get("/commands/history")
-def command_history(
-    page: int = 1,
-    limit: int = 20,
-    sort_by: str = "created_at",
-    sort_dir: str = "desc",
+@app.get("/api/v1/audit/export/{fmt}")
+def export_audit(
+    fmt: str,
+    token: str,
     device_id: Optional[str] = None,
     action: Optional[str] = None,
-    status: Optional[str] = None,
-    search: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    db: Session = Depends(get_db)
 ):
-    """Return recent command history across devices, with filtering, pagination, and sorting."""
-    query = db.query(Command)
-
-    if device_id:
-        query = query.filter(Command.device_id == device_id)
-    if action:
-        query = query.filter(Command.action == action)
-    if status:
-        query = query.filter(Command.status == status)
-    if search:
-        search_pattern = f"%{search}%"
-        query = query.filter(
-            (Command.username.ilike(search_pattern)) |
-            (Command.result.ilike(search_pattern)) |
-            (Command.payload.ilike(search_pattern))
-        )
-
-    # Calculate total matching results before limit/offset
-    total_count = query.count()
-
-    # Apply sorting
-    sort_col = getattr(Command, sort_by, None)
-    if sort_col is None:
-        sort_col = Command.created_at
-        
-    if sort_dir.lower() == 'asc':
-        query = query.order_by(sort_col.asc())
-    else:
-        query = query.order_by(sort_col.desc())
-
-    # Apply pagination
-    offset = (page - 1) * limit
-    cmds = query.offset(offset).limit(limit).all()
-
-    results = []
-    for c in cmds:
-        device = db.query(Device).filter(Device.id == c.device_id).first()
-        results.append({
-            "id": c.id,
-            "device_id": c.device_id,
-            "device_hostname": device.hostname if device else "Unknown",
-            "action": c.action,
-            "username": c.username,
-            "payload": "***" if c.action == "create_user" else c.payload,
-            "status": c.status,
-            "result": c.result,
-            "created_at": c.created_at.isoformat(timespec='milliseconds') + "Z" if c.created_at else None,
-            "executed_at": c.executed_at.isoformat(timespec='milliseconds') + "Z" if c.executed_at else None,
-            "expires_at": c.expires_at.isoformat(timespec='milliseconds') + "Z" if c.expires_at else None,
-            "auto_revoked": c.auto_revoked or False,
-        })
-        
-    return {
-        "total": total_count,
-        "page": page,
-        "limit": limit,
-        "commands": results
-    }
-
-
-# ── API: Event Log Monitoring ───────────────────────────────────────────────
-
-class EventLogEntry(BaseModel):
-    event_id: int
-    event_name: str
-    log_source: str
-    timestamp: str
-    username: Optional[str] = None
-    hostname: Optional[str] = None
-    message: Optional[str] = None
-
-class DeviceLogsPayload(BaseModel):
-    device_id: str
-    logs: list[EventLogEntry]
-
-@app.post("/api/v1/device/logs")
-def ingest_device_logs(
-    payload: DeviceLogsPayload,
-    db: Session = Depends(get_db),
-    agent_auth: None = Depends(require_agent_token),
-):
-    """Receive batched event logs from an agent."""
-    device = db.query(Device).filter(Device.id == payload.device_id).first()
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-
-    inserted = 0
-    for entry in payload.logs:
-        try:
-            ts = datetime.fromisoformat(entry.timestamp.replace("Z", "+00:00"))
-        except Exception:
-            ts = datetime.now(timezone.utc)
-
-        log_row = EventLog(
-            device_id=payload.device_id,
-            hostname=entry.hostname or device.hostname,
-            username=entry.username,
-            event_id=entry.event_id,
-            event_name=entry.event_name,
-            log_source=entry.log_source,
-            timestamp=ts,
-            message=entry.message,
-        )
-        db.add(log_row)
-        inserted += 1
-
-    db.commit()
-    return {"status": "ok", "inserted": inserted}
-
-
-@app.get("/api/v1/event-logs")
-def get_event_logs(
-    page: int = 1,
-    limit: int = 20,
-    sort_by: str = "timestamp",
-    sort_dir: str = "desc",
-    device_id: Optional[str] = None,
-    log_source: Optional[str] = None,
-    event_id: Optional[int] = None,
-    search: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Return paginated, filterable, sortable event logs for the portal."""
-    query = db.query(EventLog)
-
-    if device_id:
-        query = query.filter(EventLog.device_id == device_id)
-    if log_source:
-        query = query.filter(EventLog.log_source == log_source)
-    if event_id:
-        query = query.filter(EventLog.event_id == event_id)
-    if search:
-        pattern = f"%{search}%"
-        query = query.filter(
-            (EventLog.username.ilike(pattern)) |
-            (EventLog.message.ilike(pattern)) |
-            (EventLog.event_name.ilike(pattern))
-        )
-
-    total_count = query.count()
-
-    # Apply sorting
-    sort_col = getattr(EventLog, sort_by, None)
-    if sort_col is None:
-        sort_col = EventLog.timestamp
-    if sort_dir.lower() == 'asc':
-        query = query.order_by(sort_col.asc())
-    else:
-        query = query.order_by(sort_col.desc())
-
-    # Apply pagination
-    offset = (page - 1) * limit
-    logs = query.offset(offset).limit(limit).all()
-
-    results = []
-    for log_entry in logs:
-        device = db.query(Device).filter(Device.id == log_entry.device_id).first()
-        results.append({
-            "id": log_entry.id,
-            "device_id": log_entry.device_id,
-            "hostname": log_entry.hostname or (device.hostname if device else "Unknown"),
-            "username": log_entry.username,
-            "event_id": log_entry.event_id,
-            "event_name": log_entry.event_name,
-            "log_source": log_entry.log_source,
-            "timestamp": log_entry.timestamp.isoformat(timespec='milliseconds') + "Z" if log_entry.timestamp else None,
-            "message": log_entry.message,
-            "created_at": log_entry.created_at.isoformat(timespec='milliseconds') + "Z" if log_entry.created_at else None,
-        })
-
-    return {
-        "total": total_count,
-        "page": page,
-        "limit": limit,
-        "logs": results
-    }
-
-
-@app.get("/api/v1/event-logs/summary")
-def get_event_log_summary(
-    device_id: Optional[str] = None,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Return aggregated event log counts for dashboard stats cards."""
-    from sqlalchemy import func  # type: ignore
-
-    query = db.query(EventLog.event_name, func.count(EventLog.id).label("count"))
-
-    if device_id:
-        query = query.filter(EventLog.device_id == device_id)
-
-    rows = query.group_by(EventLog.event_name).all()
-
-    summary = {}
-    for event_name, count in rows:
-        summary[event_name] = count
-
-    # Calculate category totals
-    login_events = {
-        "login_success", "login_failed", "logon_explicit_creds",
-        "ntlm_auth", "kerberos_ticket_req", "kerberos_service_req", 
-        "kerberos_ticket_renew", "kerberos_preauth_failed"
-    }
-    logoff_events = {"logoff", "user_logoff"}
-    crash_events = {"app_crash", "app_hang", "error_reporting"}
-    privilege_events = {
-        "priv_use", "priv_service_op", "user_added_to_group", "user_added_to_priv_group",
-        "special_privs_assigned", "priv_service_call", "priv_obj_access", "special_groups_assigned"
-    }
-
-    return {
-        "total_events": sum(summary.values()),
-        "logins": sum(summary.get(e, 0) for e in login_events),
-        "logoffs": sum(summary.get(e, 0) for e in logoff_events),
-        "crashes": sum(summary.get(e, 0) for e in crash_events),
-        "privilege_events": sum(summary.get(e, 0) for e in privilege_events),
-        "by_event_name": summary
-    }
-
-# ── API: Scheduled Notifications ───────────────────────────────────────────
-
-class NotificationCreateRequest(BaseModel):
-    device_ids: list[str]
-    message: str
-    target_users: list[str]
-    is_recurring: bool
-    start_time: Optional[str] = None
-    end_time: Optional[str] = None
-    interval_minutes: Optional[int] = None
-
-@app.post("/api/v1/notifications")
-def create_notification(req: NotificationCreateRequest, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    """Create a new notification (one-off or recurring) for multiple devices."""
-    devices = db.query(Device).filter(Device.id.in_(req.device_ids)).all()
-    if not devices:
-        raise HTTPException(status_code=404, detail="No matching devices found")
-
-    if not req.is_recurring:
-        # One-off: Just queue a command immediately for each
-        for d in devices:
-            cmd = Command(
-                device_id=d.id,
-                action="notify",
-                username="system",
-                payload=json.dumps({
-                    "message": req.message,
-                    "target_users": req.target_users
-                })
-            )
-            db.add(cmd)
-        db.commit()
-        return {"message": f"One-off notification queued for {len(devices)} devices."}
-    
-    # Recurring campaign
-    if not req.start_time or not req.end_time or not req.interval_minutes:
-        raise HTTPException(status_code=400, detail="Recurring notifications require start_time, end_time, and interval_minutes")
-    
     try:
-        st = datetime.fromisoformat(req.start_time.replace('Z', '+00:00')).astimezone(timezone.utc).replace(tzinfo=None)
-        et = datetime.fromisoformat(req.end_time.replace('Z', '+00:00')).astimezone(timezone.utc).replace(tzinfo=None)
-    except (ValueError, TypeError):
-        raise HTTPException(status_code=400, detail="Invalid datetime format. Use ISO-8601")
+        from jose import jwt, JWTError
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if not payload.get("sub"):
+            raise HTTPException(status_code=401, detail="Invalid token")
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-    created = 0
-    for d in devices:
-        camp = NotificationCampaign(
-            device_id=d.id,
-            message=req.message,
-            target_users=json.dumps(req.target_users),
-            start_time=st,
-            end_time=et,
-            interval_minutes=req.interval_minutes,
-            is_active=True
-        )
-        db.add(camp)
-        created += 1
+    query = db.query(Command).order_by(Command.created_at.desc())
+    if device_id: query = query.filter(Command.device_id == device_id)
+    if action: query = query.filter(Command.action == action)
+    cmds = query.limit(10000).all()
 
-    db.commit()
-    return {"message": f"Recurring campaign created for {created} devices"}
+    import io
+    if fmt.lower() == "csv":
+        import csv
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["ID", "Device ID", "Action", "Username", "Status", "Result", "Date"])
+        for c in cmds:
+            writer.writerow([c.id, c.device_id, c.action, c.username, c.status, c.result, c.created_at])
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(output.getvalue(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=audit.csv"})
+        
+    elif fmt.lower() == "pdf":
+        from reportlab.pdfgen import canvas
+        output = io.BytesIO()
+        c = canvas.Canvas(output)
+        c.setFont("Helvetica", 9)
+        c.drawString(50, 800, "SentraGuard Audit Log Export")
+        y = 780
+        for cmd in cmds[:200]:  # Cap at 200 for PDF to keep it simple
+            c.drawString(50, y, f"{cmd.created_at.replace(microsecond=0) if cmd.created_at else ''} | {str(cmd.device_id)[:8]} | {cmd.action} | {cmd.status} | {str(cmd.result)[:40]}")
+            y -= 12
+            if y < 50:
+                c.showPage()
+                c.setFont("Helvetica", 9)
+                y = 800
+        c.save()
+        from fastapi.responses import Response
+        return Response(output.getvalue(), media_type="application/pdf", headers={"Content-Disposition": "attachment; filename=audit.pdf"})
 
-@app.get("/api/v1/notifications/{device_id}")
-def get_notifications(device_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Get active recurring campaigns for a device."""
-    campaigns = db.query(NotificationCampaign).filter(
-        NotificationCampaign.device_id == device_id,
-        NotificationCampaign.is_active == True
-    ).order_by(NotificationCampaign.created_at.desc()).all()
-
-    results = []
-    for c in campaigns:
-        results.append({
-            "id": c.id,
-            "message": c.message,
-            "target_users": json.loads(c.target_users),
-            "start_time": c.start_time.isoformat(timespec='milliseconds') + "Z",
-            "end_time": c.end_time.isoformat(timespec='milliseconds') + "Z",
-            "interval_minutes": c.interval_minutes,
-            "last_sent": c.last_sent.isoformat(timespec='milliseconds') + "Z" if c.last_sent else None
-        })
-    return {"campaigns": results}
-
-@app.delete("/api/v1/notifications/{campaign_id}")
-def delete_notification(campaign_id: int, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
-    """Cancel a recurring campaign."""
-    camp = db.query(NotificationCampaign).filter(NotificationCampaign.id == campaign_id).first()
-    if not camp:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    
-    camp.is_active = False
-    db.commit()
-    return {"message": "Campaign cancelled successfully"}
-
-# ── Auto-Revoke Background Scheduler ────────────────────────────────────────
-
-def _auto_revoke_loop():
-    """Runs every 15 seconds; finds expired grant commands and queues revokes."""
-    import time as _time
-    while True:
-        _time.sleep(15)
-        try:
-            db = SessionLocal()
-            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-            expired = (
-                db.query(Command)
-                .filter(
-                    Command.action == "grant",
-                    Command.status == "completed",
-                    Command.auto_revoked == False,
-                    Command.expires_at != None,
-                    Command.expires_at <= now_utc,
-                )
-                .all()
-            )
-            for grant_cmd in expired:
-                # Queue an auto-revoke for this user
-                revoke_cmd = Command(
-                    device_id=grant_cmd.device_id,
-                    action="revoke",
-                    username=grant_cmd.username,
-                    payload="System Auto-Revoke"
-                )
-                db.add(revoke_cmd)
-                grant_cmd.auto_revoked = True
-            if expired:
-                db.commit()
-        except Exception:
-            pass
-        finally:
-            db.close()
+    raise HTTPException(status_code=400, detail="Invalid format")
 
 
-# Start the background threads when the module loads
-_revoke_thread = threading.Thread(target=_auto_revoke_loop, daemon=True)
-_revoke_thread.start()
+# ── Legacy v1 Compatibility Endpoints ─────────────────────────────────────────
 
-def _notification_scheduler_loop():
-    """Runs every 30 seconds; fires pending notifications."""
-    import time as _time
-    from datetime import timedelta
-    while True:
-        _time.sleep(30)
-        try:
-            db = SessionLocal()
-            now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
-            active_camps = db.query(NotificationCampaign).filter(
-                NotificationCampaign.is_active == True,
-                NotificationCampaign.start_time <= now_utc,
-                NotificationCampaign.end_time >= now_utc
-            ).all()
-
-            for camp in active_camps:
-                should_fire = False
-                if not camp.last_sent:
-                    should_fire = True
-                else:
-                    elapsed_mins = (now_utc - camp.last_sent).total_seconds() / 60.0
-                    if elapsed_mins >= camp.interval_minutes:
-                        should_fire = True
-
-                    target_users_list = ["All"]
-                    try:
-                        target_users_list = json.loads(camp.target_users)
-                    except Exception:
-                        pass
-                        
-                    cmd = Command(
-                        device_id=camp.device_id,
-                        action="notify",
-                        username="system",
-                        payload=json.dumps({
-                            "message": camp.message,
-                            "target_users": target_users_list
-                        })
-                    )
-                    db.add(cmd)
-                    camp.last_sent = now_utc
-
-            # Handle expiry cleanup
-            expired_camps = db.query(NotificationCampaign).filter(
-                NotificationCampaign.is_active == True,
-                NotificationCampaign.end_time < now_utc
-            ).all()
-            for EC in expired_camps:
-                EC.is_active = False
-
-            db.commit()
-        except Exception as e:
-            print(f"[{datetime.now().isoformat()}] [_notification_scheduler_loop] Error: {e}")
-        finally:
-            db.close()
-
-_notify_thread = threading.Thread(target=_notification_scheduler_loop, daemon=True)
-_notify_thread.start()
-
-
-# ── Audit Log Export ─────────────────────────────────────────────────────────
-
-from fastapi.responses import StreamingResponse  # type: ignore
-import csv, io
-
-@app.get("/api/v1/audit/export/csv")
-def export_audit_csv(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+@app.get('/api/v1/activity')
+def legacy_get_activity(
+    request: Request, db: Session = Depends(get_db),
+    page: int = 1, limit: int = 20,
+    device_id: str = None, username: str = None, search: str = None,
+    date_from: str = None, date_to: str = None
 ):
-    """Download the full command history as a CSV file."""
-    cmds = db.query(Command).order_by(Command.created_at.desc()).all()
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["ID", "Device ID", "Action", "Username", "Payload", "Status", "Result", "Created At", "Executed At", "Expires At", "Auto Revoked"])
-    for c in cmds:
-        writer.writerow([
-            c.id, c.device_id, c.action,
-            c.username or "",
-            "***" if c.action == "create_user" else (c.payload or ""),
-            c.status, (c.result or "")[:200],
-            c.created_at.isoformat() if c.created_at else "",
-            c.executed_at.isoformat() if c.executed_at else "",
-            c.expires_at.isoformat() if c.expires_at else "",
-            str(c.auto_revoked or False),
-        ])
-
-    output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=audit_log.csv"},
+    from activity_service import get_events
+    res = get_events(
+        request=request, db=db, current_user=None, 
+        machine=device_id, username=username, event_type=None, 
+        synced=None, search=search, date_from=date_from, 
+        date_to=date_to, page=page, limit=limit, format=None
     )
+    res['items'] = res.pop('events', [])
+    return res
 
 
-@app.get("/api/v1/audit/export/pdf")
-def export_audit_pdf(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
+@app.get('/api/v1/activity/stats')
+def legacy_get_stats(
+    request: Request, db: Session = Depends(get_db),
+    device_id: str = None, date_from: str = None, date_to: str = None
 ):
-    """Download the full command history as a PDF file."""
-    try:
-        from reportlab.lib.pagesizes import A4, landscape  # type: ignore
-        from reportlab.lib import colors  # type: ignore
-        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer  # type: ignore
-        from reportlab.lib.styles import getSampleStyleSheet  # type: ignore
-    except ImportError:
-        raise HTTPException(status_code=500, detail="reportlab not installed. Run: pip install reportlab")
-
-    cmds = db.query(Command).order_by(Command.created_at.desc()).limit(500).all()
-
-    buf = io.BytesIO()
-    doc = SimpleDocTemplate(buf, pagesize=landscape(A4), rightMargin=20, leftMargin=20, topMargin=30, bottomMargin=20)
-    styles = getSampleStyleSheet()
-    elems = []
-
-    elems.append(Paragraph("Admin Control System — Audit Log Export", styles["Title"]))
-    elems.append(Paragraph(f"Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}", styles["Normal"]))
-    elems.append(Spacer(1, 12))
-
-    headers = ["ID", "Device ID", "Action", "User", "Status", "Result", "Created At"]
-    data = [headers]
-    for c in cmds:
-        data.append([
-            str(c.id),
-            str(c.device_id)[:8] + "...",
-            c.action,
-            c.username or "—",
-            c.status,
-            (c.result or "")[:60],
-            c.created_at.strftime("%Y-%m-%d %H:%M") if c.created_at else "—",
-        ])
-
-    table = Table(data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a2535")),
-        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f4f8")]),
-        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cccccc")),
-        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 4),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-    ]))
-    elems.append(table)
-    doc.build(elems)
-
-    buf.seek(0)
-    return StreamingResponse(
-        iter([buf.read()]),
-        media_type="application/pdf",
-        headers={"Content-Disposition": "attachment; filename=audit_log.pdf"},
-    )
+    from activity_service import get_kpi
+    res = get_kpi(request=request, db=db, current_user=None, window_minutes=30)
+    return {
+        'total_idle_seconds': res['idle'] * 60,
+        'device_count': res['total_registered'],
+        'process_distribution': {
+            'System Idle Process': res['idle'] * 60,
+            'Active Apps': res['active'] * 60
+        }
+    }
 
 
-# ── Serve Portal Static Files ───────────────────────────────────────────────
+@app.get('/api/v1/activity/users')
+def legacy_get_users(request: Request, db: Session = Depends(get_db)):
+    from models import ActivityEvent
+    q = db.query(ActivityEvent.username).distinct().all()
+    return {'users': [x[0] for x in q if x[0]]}
 
-PORTAL_DIR = Path(__file__).resolve().parent.parent / "portal"
 
+@app.get('/api/v1/activity/device-summary')
+def legacy_device_summary(request: Request, db: Session = Depends(get_db)):
+    from activity_service import get_summary
+    sum_data = get_summary(request=request, db=db, current_user=None, date_from=None, date_to=None)
+    return {
+        'devices': [
+            {'device_id': getattr(row, 'machine', None) or row[0], 'username': None, 'active_seconds': (getattr(row, 'active_count', None) or row[2] or 0) * 60, 'idle_seconds': 0}
+            for row in sum_data['by_machine']
+        ]
+    }
+
+
+@app.get('/api/v1/activity/hourly')
+def legacy_hourly(request: Request, db: Session = Depends(get_db)):
+    from activity_service import get_summary
+    sum_data = get_summary(request=request, db=db, current_user=None, date_from=None, date_to=None)
+    return {'hourly': sum_data.get('hourly', [])}
+
+
+@app.get('/api/v1/activity/summary')
+def legacy_summary(request: Request, db: Session = Depends(get_db)):
+    from activity_service import get_summary
+    sum_data = get_summary(request=request, db=db, current_user=None, date_from=None, date_to=None)
+    return {
+        'users': [{'username': getattr(row, 'username', None) or row[0], 'event_count': getattr(row, 'total', None) or row[1]} for row in sum_data['by_user']]
+    }
+
+
+# ── Static File Serving (Must be at the end) ────────────────────────────────
+
+# Locate portal dir: works whether app.py runs from server/ OR AdminControlSystem/
+_candidate_1 = Path(__file__).resolve().parent.parent / "portal"
+_candidate_2 = Path.cwd().parent / "portal"
+_candidate_3 = Path.cwd() / "portal"
+PORTAL_DIR = next(
+    (p for p in [_candidate_1, _candidate_2, _candidate_3] if p.is_dir()),
+    _candidate_1,  # fallback even if missing
+)
+import logging as _logging
+_logging.getLogger("uvicorn").info(f"[ACS] Portal static dir: {PORTAL_DIR}")
 
 @app.get("/")
-def serve_portal():
-    """Serve the portal index.html."""
-    index = PORTAL_DIR / "index.html"
-    if index.exists():
-        return FileResponse(index)
-    return {"message": "Portal not found. Place index.html in ../portal/"}
+def serve_index():
+    return FileResponse(PORTAL_DIR / "index.html")
 
+app.mount("/portal", StaticFiles(directory=str(PORTAL_DIR)), name="portal")
 
-# Mount the portal directory for JS/CSS assets
-if UPDATES_DIR.exists():
-    app.mount("/downloads", StaticFiles(directory=str(UPDATES_DIR)), name="downloads")
-
-if PORTAL_DIR.exists():
-    app.mount("/portal", StaticFiles(directory=str(PORTAL_DIR)), name="portal")

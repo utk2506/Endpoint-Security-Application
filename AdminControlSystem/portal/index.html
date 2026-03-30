@@ -7,11 +7,13 @@
     <title>SentraGuard Admin Portal</title>
     <meta name="description" content="SentraGuard — Next-gen endpoint protection & admin control portal.">
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;500;600;700&family=Syne:wght@400;600;700;800&family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" defer></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js"></script>
     <link rel="icon" href="/portal/assets/sentraguard_favicon.ico">
     <link rel="stylesheet" href="/portal/styles.css">
 </head>
@@ -19,6 +21,25 @@
 <body>
 
     <!-- ═══════════════════ MODALS (always in DOM) ═══════════════════ -->
+
+    <!-- Activity Report Panel Modal -->
+    <div class="modal-overlay" id="reportPanelModal" onclick="if(event.target===this)closeReportPanel()">
+        <div class="modal-box size-md" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <span style="font-family:'Syne',sans-serif;">📄 Generate Report</span>
+                <button class="modal-close" onclick="closeReportPanel()">×</button>
+            </div>
+            <div class="modal-body" style="padding:20px;">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
+                    <button class="btn btn-outline" onclick="generateReport('daily')" style="padding:12px;font-size:12px;">📅 Daily Activity Report</button>
+                    <button class="btn btn-outline" onclick="generateReport('monthly')" style="padding:12px;font-size:12px;">📆 Monthly Productivity</button>
+                    <button class="btn btn-outline" onclick="generateReport('app_usage')" style="padding:12px;font-size:12px;">💻 Application Usage Report</button>
+                    <button class="btn btn-outline" onclick="generateReport('idle')" style="padding:12px;font-size:12px;">⏸ Idle Analysis Report</button>
+                </div>
+                <div id="reportGenStatus" class="act-report-status"></div>
+            </div>
+        </div>
+    </div>
 
     <!-- Terminal Modal -->
     <div class="modal-overlay" id="terminalModal">
@@ -937,220 +958,430 @@
 
             <!-- ──────────────── ACTIVITY VIEW ──────────────── -->
             <div class="view" id="view-activity">
+
+                <!-- Scanline cosmetic effect -->
+                <div class="act-scanline"></div>
+
+                <!-- Page Header -->
                 <div class="page-header">
-                    <div class="page-title">🧭 User Activity</div>
-                </div>
-
-                <div class="filter-grid" style="margin-bottom:12px;">
-                    <div class="form-field" style="margin:0;">
-                        <label>Device</label>
-                        <select id="activityDevice">
-                            <option value="">All devices</option>
-                        </select>
+                    <div>
+                        <div class="page-title" style="font-family:'Syne',sans-serif;">Activity Dashboard</div>
+                        <div style="font-size:11px;color:var(--text-3);margin-top:2px;font-family:'JetBrains Mono',monospace;">
+                            Real-time endpoint monitoring · Updated every 60s
+                        </div>
                     </div>
-                    <div class="form-field" style="margin:0;">
-                        <label>Username</label>
-                        <select id="activityUser">
-                            <option value="">All users</option>
-                        </select>
-                    </div>
-                    <div class="form-field" style="margin:0;">
-                        <label>Search</label>
-                        <input id="activitySearch" type="text" placeholder="Window title or process"
-                            onkeydown="if(event.key==='Enter') loadActivity(1)">
-                    </div>
-                    <div class="form-field" style="margin:0;">
-                        <label>From (UTC)</label>
-                        <input id="activityFrom" type="datetime-local">
-                    </div>
-                    <div class="form-field" style="margin:0;">
-                        <label>To (UTC)</label>
-                        <input id="activityTo" type="datetime-local">
-                    </div>
-                    <div style="display:flex; align-items:flex-end; gap:8px;">
-                        <button class="btn btn-primary" onclick="loadActivity(1)">Apply</button>
-                        <button class="btn btn-outline" onclick="exportActivityCSV()" title="Export current stream to CSV">⬇ CSV</button>
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span id="actRangeLabel" style="font-size:10px;color:var(--accent);background:var(--accent-light);padding:4px 12px;border-radius:12px;letter-spacing:0.06em;"></span>
+                        <span style="font-size:10px;color:var(--text-3);">Next refresh in <strong id="actRefreshSecs">60</strong>s</span>
+                        <button class="btn btn-primary btn-sm" onclick="loadAnalyticsCharts()">⟳ Refresh</button>
                     </div>
                 </div>
 
-                <!-- System Activity Insights Row -->
+                <!-- ── Global Filter Bar ── -->
                 <div class="widget" style="margin-bottom:16px;">
-                    <div class="widget-header">
-                        <span class="widget-title">🧭 System Activity Insights (Last 24h)</span>
-                        <span id="activityDeviceCount" class="badge badge-info" style="margin-left: 10px; display:none;">1 Device</span>
+                    <div class="widget-body" style="padding:14px 18px;">
+                        <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;">
+
+                            <!-- Period Tabs -->
+                            <div class="act-period-tabs">
+                                <button class="act-period-tab active" onclick="setActivityPeriod('daily',this)">Today</button>
+                                <button class="act-period-tab" onclick="setActivityPeriod('weekly',this)">Week</button>
+                                <button class="act-period-tab" onclick="setActivityPeriod('monthly',this)">Month</button>
+                                <button class="act-period-tab" onclick="setActivityPeriod('yearly',this)">Year</button>
+                                <button class="act-period-tab" onclick="setActivityPeriod('custom',this)">Custom ▾</button>
+                            </div>
+
+                            <div style="width:1px;height:28px;background:var(--border);flex-shrink:0;"></div>
+
+                            <!-- Dropdowns -->
+                            <select id="actMachine" class="act-filter-select" onchange="applyActivityFilters()">
+                                <option value="">All Machines</option>
+                            </select>
+                            <select id="actUser" class="act-filter-select" onchange="applyActivityFilters()">
+                                <option value="">All Users</option>
+                            </select>
+                            <select id="actEventType" class="act-filter-select" onchange="applyActivityFilters()">
+                                <option value="">All Events</option>
+                                <option value="LOGIN">LOGIN</option>
+                                <option value="LOGOUT">LOGOUT</option>
+                                <option value="LOCK">LOCK</option>
+                                <option value="UNLOCK">UNLOCK</option>
+                                <option value="IDLE">IDLE</option>
+                                <option value="ACTIVE">ACTIVE</option>
+                                <option value="STARTUP">STARTUP</option>
+                                <option value="SHUTDOWN">SHUTDOWN</option>
+                                <option value="SCREEN_ON">SCREEN_ON</option>
+                                <option value="SCREEN_OFF">SCREEN_OFF</option>
+                                <option value="APP_USAGE">APP_USAGE</option>
+                            </select>
+                            <select id="actProcess" class="act-filter-select" onchange="applyActivityFilters()">
+                                <option value="">All Apps</option>
+                            </select>
+                            <select id="actSynced" class="act-filter-select" onchange="applyActivityFilters()">
+                                <option value="">All Sync States</option>
+                                <option value="synced">Synced</option>
+                                <option value="pending">Pending</option>
+                            </select>
+                            <input id="actSearch" class="act-filter-select" type="text"
+                                placeholder="🔍 Search user, machine…"
+                                style="width:190px;"
+                                onkeydown="if(event.key==='Enter') applyActivityFilters()">
+
+                            <!-- Action Buttons -->
+                            <div style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap;">
+                                <button class="btn btn-outline btn-sm" onclick="resetActivityFilters()">✕ Reset</button>
+                                <button class="btn btn-outline btn-sm" onclick="exportActivityCSV()">⬇ CSV</button>
+                                <button class="btn btn-outline btn-sm" onclick="exportActivityXLSX()">⬇ XLSX</button>
+                                <button class="btn btn-outline btn-sm" onclick="exportActivityPDF()">⬇ PDF</button>
+                                <button class="btn btn-primary btn-sm" onclick="openReportPanel()">📄 Reports</button>
+                            </div>
+                        </div>
+
+                        <!-- Custom Date Range (hidden by default) -->
+                        <div id="actCustomRange" style="display:none;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+                            <span style="font-size:11px;color:var(--text-3);">FROM</span>
+                            <input type="date" id="actDateFrom" class="act-filter-select" style="width:150px;">
+                            <span style="font-size:11px;color:var(--text-3);">TO</span>
+                            <input type="date" id="actDateTo" class="act-filter-select" style="width:150px;">
+                            <button class="btn btn-primary btn-sm" onclick="applyActivityCustomRange()">Apply Range</button>
+                        </div>
                     </div>
-                    <div class="widget-body" style="display:flex; flex-wrap:wrap; gap:30px; padding:25px;">
-                        <!-- Left: Status Ring (Active vs Idle) -->
-                        <div style="flex: 0 0 220px; display:flex; flex-direction:column; align-items:center;">
-                            <div style="position:relative; width:180px; height:180px;">
-                                <canvas id="statusRingChart"></canvas>
-                                <div style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); text-align:center;">
-                                    <div id="activePercentageText" style="font-size:28px; font-weight:800; color:var(--accent-1); line-height:1;">0%</div>
-                                    <div style="font-size:10px; color:var(--text-3); text-transform:uppercase; margin-top:4px;">Active</div>
+                </div>
+
+                <!-- ── KPI Cards ── -->
+                <div class="act-kpi-grid" style="margin-bottom:16px;">
+                    <div class="act-kpi-card" style="--kpi-color:#00E676;">
+                        <div class="act-kpi-label">Active Users</div>
+                        <div class="act-kpi-value" id="actKpiActive">—</div>
+                        <div class="act-kpi-sub">machines with active session</div>
+                        <div class="act-kpi-icon">⚡</div>
+                    </div>
+                    <div class="act-kpi-card" style="--kpi-color:#FFC107;">
+                        <div class="act-kpi-label">Idle Users</div>
+                        <div class="act-kpi-value" id="actKpiIdle">—</div>
+                        <div class="act-kpi-sub">last event was IDLE</div>
+                        <div class="act-kpi-icon">⏸</div>
+                    </div>
+                    <div class="act-kpi-card" style="--kpi-color:#FF6B35;">
+                        <div class="act-kpi-label">Locked Machines</div>
+                        <div class="act-kpi-value" id="actKpiLocked">—</div>
+                        <div class="act-kpi-sub">screen locked</div>
+                        <div class="act-kpi-icon">🔒</div>
+                    </div>
+                    <div class="act-kpi-card" style="--kpi-color:#FF3864;">
+                        <div class="act-kpi-label">Offline Devices</div>
+                        <div class="act-kpi-value" id="actKpiOffline">—</div>
+                        <div class="act-kpi-sub">no recent events</div>
+                        <div class="act-kpi-icon">○</div>
+                    </div>
+                    <div class="act-kpi-card" style="--kpi-color:#1E90FF;">
+                        <div class="act-kpi-label">Total Events</div>
+                        <div class="act-kpi-value" id="actKpiTotal">—</div>
+                        <div class="act-kpi-sub">in selected period</div>
+                        <div class="act-kpi-icon">≡</div>
+                    </div>
+                    <div class="act-kpi-card" style="--kpi-color:#4FC3F7;">
+                        <div class="act-kpi-label">Sync Health</div>
+                        <div class="act-kpi-value" id="actKpiHealth">—</div>
+                        <div class="act-kpi-sub">events synced to server</div>
+                        <div class="act-kpi-icon">↑</div>
+                    </div>
+                </div>
+
+                <!-- ── Charts Row 1: Line + Donut ── -->
+                <div style="display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px;">
+
+                    <!-- Active Users Over Time -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">📈 Active Users Over Time</span>
+                            <div style="display:flex;gap:14px;font-size:10px;color:var(--text-3);">
+                                <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#00E676;display:inline-block;"></span>Active</span>
+                                <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#FFC107;display:inline-block;"></span>Idle</span>
+                                <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#FF6B35;display:inline-block;"></span>Locked</span>
+                                <span style="display:flex;align-items:center;gap:4px;"><span style="width:8px;height:8px;border-radius:50%;background:#FF3864;display:inline-block;"></span>Offline</span>
+                            </div>
+                        </div>
+                        <div class="widget-body" style="height:220px;padding:12px 16px;">
+                            <canvas id="actLineChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Activity Breakdown Donut -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">🍩 Activity Breakdown</span>
+                        </div>
+                        <div class="widget-body" style="padding:16px;">
+                            <div style="display:flex;align-items:center;gap:20px;">
+                                <!-- Donut -->
+                                <div style="position:relative;width:120px;height:120px;flex-shrink:0;">
+                                    <canvas id="actDonutChart"></canvas>
+                                    <div id="actDonutCenter" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;pointer-events:none;"></div>
+                                </div>
+                                <!-- Legend -->
+                                <div style="flex:1;">
+                                    <div id="actDonutActive" class="act-donut-legend-item">
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <div style="width:10px;height:10px;border-radius:2px;background:#00E676;flex-shrink:0;"></div>
+                                            <span class="act-donut-name">Active</span>
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <span class="act-donut-val" style="font-weight:700;color:#E8F3FF;font-size:15px;">—</span>
+                                            <span class="act-donut-pct" style="font-size:10px;color:var(--text-3);">—</span>
+                                        </div>
+                                    </div>
+                                    <div id="actDonutIdle" class="act-donut-legend-item">
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <div style="width:10px;height:10px;border-radius:2px;background:#FFC107;flex-shrink:0;"></div>
+                                            <span class="act-donut-name">Idle</span>
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <span class="act-donut-val" style="font-weight:700;color:#E8F3FF;font-size:15px;">—</span>
+                                            <span class="act-donut-pct" style="font-size:10px;color:var(--text-3);">—</span>
+                                        </div>
+                                    </div>
+                                    <div id="actDonutLocked" class="act-donut-legend-item">
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <div style="width:10px;height:10px;border-radius:2px;background:#FF6B35;flex-shrink:0;"></div>
+                                            <span class="act-donut-name">Locked</span>
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <span class="act-donut-val" style="font-weight:700;color:#E8F3FF;font-size:15px;">—</span>
+                                            <span class="act-donut-pct" style="font-size:10px;color:var(--text-3);">—</span>
+                                        </div>
+                                    </div>
+                                    <div id="actDonutOffline" class="act-donut-legend-item" style="border-bottom:none;margin-bottom:0;padding-bottom:0;">
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <div style="width:10px;height:10px;border-radius:2px;background:#FF3864;flex-shrink:0;"></div>
+                                            <span class="act-donut-name">Offline</span>
+                                        </div>
+                                        <div style="display:flex;align-items:center;gap:6px;">
+                                            <span class="act-donut-val" style="font-weight:700;color:#E8F3FF;font-size:15px;">—</span>
+                                            <span class="act-donut-pct" style="font-size:10px;color:var(--text-3);">—</span>
+                                        </div>
+                                    </div>
                                 </div>
                             </div>
-                            <div style="margin-top:20px; display:grid; grid-template-columns: 1fr; gap:10px; width:100%;">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ── Charts Row 2: Top Machines + Session Analysis ── -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+
+                    <!-- Top Active Machines -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">🖥️ Top Active Machines</span>
+                            <small style="color:var(--text-3);">by total active time</small>
+                        </div>
+                        <div class="widget-body" style="padding:16px 20px;">
+                            <div id="actTopMachinesBar">
+                                <div class="empty-state">Loading…</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Session Duration Analysis -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title">⏱️ Session Duration Analysis</span>
+                        </div>
+                        <div class="widget-body" style="padding:16px 20px;">
+                            <div id="actSessionBuckets" class="act-session-bars"></div>
+                            <div style="display:flex;justify-content:space-between;margin-top:16px;padding-top:14px;border-top:1px solid var(--border);">
                                 <div style="text-align:center;">
-                                    <div id="statActiveTime" style="font-size:18px; font-weight:700; color:var(--success);">0h 0m</div>
-                                    <div style="font-size:11px; color:var(--text-3);">Active Time</div>
+                                    <div style="font-size:10px;color:var(--text-3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em;">Avg Session</div>
+                                    <div id="actSessAvg" style="font-size:20px;font-weight:700;color:#E8F3FF;">—</div>
                                 </div>
-                                <div style="text-align:center; border-top: 1px solid var(--border); padding-top:10px;">
-                                    <div id="statIdleTime" style="font-size:18px; font-weight:700; color:var(--warning);">0h 0m</div>
-                                    <div style="font-size:11px; color:var(--text-3);">Idle Time</div>
+                                <div style="text-align:center;">
+                                    <div style="font-size:10px;color:var(--text-3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em;">Longest</div>
+                                    <div id="actSessLongest" style="font-size:20px;font-weight:700;color:#E8F3FF;">—</div>
+                                </div>
+                                <div style="text-align:center;">
+                                    <div style="font-size:10px;color:var(--text-3);margin-bottom:4px;text-transform:uppercase;letter-spacing:.08em;">Sessions</div>
+                                    <div id="actSessTotal" style="font-size:20px;font-weight:700;color:#E8F3FF;">—</div>
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
 
-                        <!-- Right: Top Application Bar Chart -->
-                        <div style="flex:1; min-width:350px; border-left: 1px solid var(--border); padding-left: 30px;">
-                            <div style="font-size:13px; font-weight:600; margin-bottom:20px; color:var(--text-2); display:flex; justify-content:space-between; align-items:center;">
-                                <span>🚀 Top Application Usage Breakdown</span>
-                                <small style="color:var(--text-3); font-weight:normal;">Man-hours across selected devices</small>
+                <!-- ── Charts Row 3: Login Distribution + App Usage Donut ── -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;">
+
+                    <!-- Login Time Distribution -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title" style="font-family:'Syne',sans-serif;">🕐 Login Time Distribution</span>
+                            <small style="color:var(--text-3);font-family:'JetBrains Mono',monospace;">logins per hour of day</small>
+                        </div>
+                        <div class="widget-body" style="height:200px;padding:12px 16px;">
+                            <canvas id="actLoginDistChart"></canvas>
+                        </div>
+                    </div>
+
+                    <!-- Application Usage Donut -->
+                    <div class="widget">
+                        <div class="widget-header">
+                            <span class="widget-title" style="font-family:'Syne',sans-serif;">💻 Application Usage</span>
+                            <small style="color:var(--text-3);font-family:'JetBrains Mono',monospace;">by tracked time</small>
+                        </div>
+                        <div class="widget-body" style="padding:16px;">
+                            <div style="display:flex;align-items:center;gap:20px;">
+                                <div style="position:relative;width:120px;height:120px;flex-shrink:0;">
+                                    <canvas id="actAppDonutChart"></canvas>
+                                </div>
+                                <div id="actAppDonutLegend" style="flex:1;font-size:11px;">
+                                    <div class="empty-state" style="font-size:11px;">No app tracking data yet.<br>Requires APP_USAGE events from agent.</div>
+                                </div>
                             </div>
-                            <div style="height:280px; width:100%;">
-                                <canvas id="appUsageBarChart"></canvas>
-                            </div>
                         </div>
                     </div>
                 </div>
 
-                <!-- ── Device-Wise Activity Summary ── -->
+                <!-- ── Charts Row 4: User Productivity ── -->
                 <div class="widget" style="margin-bottom:16px;">
                     <div class="widget-header">
-                        <span class="widget-title">🖥️ Device-Wise Activity Summary</span>
-                        <span id="deviceSummaryCount" class="muted-pill">—</span>
-                    </div>
-                    <div class="widget-body" style="padding:0;">
-                        <div class="table-wrap" style="border:none;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Device</th>
-                                        <th>Active Time</th>
-                                        <th>Idle Time</th>
-                                        <th>Users Seen</th>
-                                        <th>Top App</th>
-                                        <th>Clicks / Keys</th>
-                                        <th>Risk Score</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="deviceSummaryBody">
-                                    <tr><td colspan="7"><div class="empty-state">Loading…</div></td></tr>
-                                </tbody>
-                            </table>
+                        <span class="widget-title" style="font-family:'Syne',sans-serif;">📊 User Productivity</span>
+                        <div style="display:flex;gap:14px;font-size:10px;color:var(--text-3);">
+                            <span style="display:flex;align-items:center;gap:4px;"><span style="background:#00E676;display:inline-block;width:10px;height:10px;border-radius:2px;"></span>Active</span>
+                            <span style="display:flex;align-items:center;gap:4px;"><span style="background:#FFC107;display:inline-block;width:10px;height:10px;border-radius:2px;"></span>Idle</span>
+                            <span style="display:flex;align-items:center;gap:4px;"><span style="background:#FF6B35;display:inline-block;width:10px;height:10px;border-radius:2px;"></span>Locked</span>
                         </div>
+                    </div>
+                    <div class="widget-body act-productivity-wrap">
+                        <canvas id="actProductivityChart"></canvas>
                     </div>
                 </div>
 
-                <!-- ── Hourly Activity Heatmap ── -->
+                <!-- ── Machine Usage Heatmap ── -->
                 <div class="widget" style="margin-bottom:16px;">
                     <div class="widget-header">
-                        <span class="widget-title">🕒 Hourly Activity Heatmap (Last 24h)</span>
-                        <small id="heatmapDeviceLabel" style="color:var(--text-3);"></small>
+                        <span class="widget-title">🔥 Machine Usage Heatmap</span>
+                        <div style="display:flex;align-items:center;gap:8px;font-size:10px;color:var(--text-3);">
+                            <div style="width:60px;height:8px;border-radius:3px;background:linear-gradient(90deg,#0d1a24,#1E90FF);"></div>
+                            <span>Low → High activity</span>
+                        </div>
                     </div>
-                    <div class="widget-body" style="padding:16px 20px;">
-                        <div id="hourlyHeatmap" style="display:grid; grid-template-columns: repeat(24,1fr); gap:4px;"></div>
-                        <div style="display:flex; gap:16px; margin-top:10px; font-size:11px; color:var(--text-3);">
-                            <span style="display:flex; align-items:center; gap:4px;"><span style="width:12px;height:12px;border-radius:2px;background:#27ae60;display:inline-block;"></span>Active</span>
-                            <span style="display:flex; align-items:center; gap:4px;"><span style="width:12px;height:12px;border-radius:2px;background:#f39c12;display:inline-block;"></span>Mixed</span>
-                            <span style="display:flex; align-items:center; gap:4px;"><span style="width:12px;height:12px;border-radius:2px;background:#ecf0f1;display:inline-block;"></span>Idle / No data</span>
+                    <div class="widget-body" style="padding:14px 20px;overflow-x:auto;">
+                        <div id="actHeatmapGrid">
+                            <div class="empty-state">Loading…</div>
                         </div>
                     </div>
                 </div>
 
-                <!-- ── Per-User Summary ── -->
+                <!-- ── User Activity Timeline ── -->
                 <div class="widget" style="margin-bottom:16px;">
                     <div class="widget-header">
-                        <span class="widget-title">👤 Per-User Activity Summary</span>
-                        <span id="userSummaryCount" class="muted-pill">—</span>
-                    </div>
-                    <div class="widget-body" style="padding:0;">
-                        <div class="table-wrap" style="border:none;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Username</th>
-                                        <th>Active Time</th>
-                                        <th>Idle Time</th>
-                                        <th>Clicks</th>
-                                        <th>Keypresses</th>
-                                        <th>Top Apps</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="userSummaryBody">
-                                    <tr><td colspan="6"><div class="empty-state">Loading…</div></td></tr>
-                                </tbody>
-                            </table>
+                        <span class="widget-title">📅 User Activity Timeline</span>
+                        <div style="display:flex;gap:12px;font-size:10px;color:var(--text-3);">
+                            <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:rgba(0,230,118,0.5);display:inline-block;"></span>Active</span>
+                            <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:rgba(255,193,7,0.5);display:inline-block;"></span>Idle</span>
+                            <span style="display:flex;align-items:center;gap:4px;"><span style="width:10px;height:10px;border-radius:2px;background:rgba(255,107,53,0.5);display:inline-block;"></span>Locked</span>
                         </div>
+                    </div>
+                    <div class="widget-body" style="padding:12px 20px;overflow-x:auto;-webkit-overflow-scrolling:touch;">
+                        <div style="min-width:420px;">
+                        <!-- Tick labels -->
+                        <div style="position:relative;height:20px;margin-left:96px;margin-bottom:6px;">
+                            <div id="actTimelineTicks" style="position:relative;width:100%;height:100%;"></div>
+                        </div>
+                        <!-- User rows -->
+                        <div id="actTimelineRows">
+                            <div class="empty-state">Loading…</div>
+                        </div>
+                        </div><!-- end min-width wrapper -->
                     </div>
                 </div>
 
-                <!-- Detailed Breakdown Row -->
-                <div class="widget" style="margin-bottom:16px;">
-                    <div class="widget-header">
-                        <span class="widget-title">🔍 Detailed Application &amp; Window Breakdown</span>
-                    </div>
-                    <div class="widget-body">
-                        <div class="table-wrap" style="border:none;">
-                            <table>
-                                <thead>
-                                    <tr>
-                                        <th>Application / Process</th>
-                                        <th>Recent Window Titles</th>
-                                        <th style="width:120px;">Est. Time</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="activityDetailsBody">
-                                    <tr>
-                                        <td colspan="3"><div class="empty-state">Select a device to view breakdown</div></td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
+                <!-- ── Event Feed Table ── -->
                 <div class="widget">
                     <div class="widget-header">
-                        <span class="widget-title">Activity Stream</span>
-                        <span id="activityTotal" class="muted-pill">0 events</span>
+                        <span class="widget-title">📋 Event Feed</span>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <span id="actEvtPageInfo" class="muted-pill">—</span>
+                        </div>
                     </div>
-                    <div class="widget-body">
-                        <div class="table-responsive">
-                            <table class="table compact">
+                    <div class="widget-body" style="padding:0;">
+                        <div class="table-wrap" style="border:none;">
+                            <table>
                                 <thead>
                                     <tr>
-                                        <th style="width:180px;">Time (UTC)</th>
-                                        <th style="width:140px;">Device</th>
-                                        <th style="width:110px;">User</th>
-                                        <th>Window Title</th>
-                                        <th style="width:150px;">Process</th>
-                                        <th style="width:80px;">Idle</th>
-                                        <th style="width:80px;">Input</th>
+                                        <th style="width:170px;">Timestamp</th>
+                                        <th style="width:100px;">User</th>
+                                        <th style="width:130px;">Machine</th>
+                                        <th style="width:120px;">Serial</th>
+                                        <th style="width:110px;">Event</th>
+                                        <th style="width:80px;">Duration</th>
+                                        <th style="width:120px;">IP Address</th>
+                                        <th style="width:90px;">Synced</th>
                                     </tr>
                                 </thead>
-                                <tbody id="activityTableBody">
-                                    <tr>
-                                        <td colspan="7">
-                                            <div class="empty-state"><span class="ei">⏳</span>Loading…</div>
-                                        </td>
-                                    </tr>
+                                <tbody id="actEventTableBody">
+                                    <tr><td colspan="8"><div class="empty-state"><span class="ei">⏳</span>Loading…</div></td></tr>
                                 </tbody>
                             </table>
                         </div>
-
                         <div class="pagination-row">
-                            <div id="activityPageInfo" class="pag-info">0 results</div>
-                            <div style="display:flex; gap:8px; align-items:center;">
-                                <button class="btn btn-outline btn-sm" id="btnActivityPrev"
-                                    onclick="activityPrevPage()">Prev</button>
-                                <span id="activityPageNumber" style="min-width:40px; text-align:center;">1</span>
-                                <button class="btn btn-outline btn-sm" id="btnActivityNext"
-                                    onclick="activityNextPage()">Next</button>
+                            <div style="font-size:11px;color:var(--text-3);" id="actEvtPageInfo2"></div>
+                            <div style="display:flex;gap:8px;align-items:center;">
+                                <button class="btn btn-outline btn-sm" id="actEvtPrev" onclick="activityPrevPage()" disabled>← Prev</button>
+                                <button class="btn btn-outline btn-sm" id="actEvtNext" onclick="activityNextPage()" disabled>Next →</button>
                             </div>
                         </div>
                     </div>
                 </div>
+
+                <!-- Legacy hidden stubs (keep old IDs alive for any cached references) -->
+                <div style="display:none;">
+                    <span id="activityTotal"></span>
+                    <span id="activityPageNumber"></span>
+                    <span id="activityPageInfo"></span>
+                    <span id="activityDeviceCount"></span>
+                    <span id="heatmapDeviceLabel"></span>
+                    <span id="deviceSummaryCount"></span>
+                    <span id="userSummaryCount"></span>
+                    <span id="statIdleTime"></span>
+                    <span id="statActiveTime"></span>
+                    <span id="activePercentageText"></span>
+                    <canvas id="statusRingChart" width="1" height="1"></canvas>
+                    <canvas id="appUsageBarChart" width="1" height="1"></canvas>
+                    <tbody id="activityTableBody"></tbody>
+                    <tbody id="activityDetailsBody"></tbody>
+                    <tbody id="deviceSummaryBody"></tbody>
+                    <tbody id="userSummaryBody"></tbody>
+                    <button id="btnActivityPrev"></button>
+                    <button id="btnActivityNext"></button>
+                    <select id="activityDevice"></select>
+                    <select id="activityUser"></select>
+                    <input id="activitySearch">
+                    <input id="activityFrom">
+                    <input id="activityTo">
+                    <input id="activityMinDuration">
+                    <input id="activityApplication">
+                    <input id="activityState">
+                    <input id="activityDepartment">
+                    <input id="reportType">
+                    <input id="reportFormat">
+                    <span id="reportStatus"></span>
+                    <span id="kpiActiveUsers"></span>
+                    <span id="kpiLoggedToday"></span>
+                    <span id="kpiAvgLogin"></span>
+                    <span id="kpiAvgLogout"></span>
+                    <span id="kpiAvgWork"></span>
+                    <span id="kpiIdlePct"></span>
+                    <span id="kpiProd"></span>
+                    <div id="chartLoginHistogram"></div>
+                    <div id="chartTimeline"></div>
+                    <div id="chartAppDonut"></div>
+                    <div id="chartUserProductivity"></div>
+                    <ul id="lockStatusList"></ul>
+                    <table id="sessionTable"><tbody></tbody></table>
+                    <div id="hourlyHeatmap"></div>
+                </div>
+
             </div>
 
 
@@ -1272,7 +1503,7 @@
         </main>
     </div><!-- /shell -->
 
-    <script src="/portal/dashboard.js"></script>
+    <script type="module" src="/portal/js/features/dashboard.js"></script>
     <script>
         // ── Sidebar Navigation ──────────────────────────────
         function showView(id, el) {

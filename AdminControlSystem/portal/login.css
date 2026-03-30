@@ -287,8 +287,96 @@ body {
     border-radius: 50%;
 }
 
-@media (max-width: 480px) {
+/* ── Responsive Login Page ─────────────────────────────────── */
+
+/* Allow scroll on small screens */
+@media (max-width: 640px) {
+    body {
+        overflow-y: auto;
+        height: auto;
+        min-height: 100vh;
+        align-items: flex-start;
+        padding: 24px 0 40px;
+    }
+
+    .login-container {
+        padding: 16px;
+    }
+
+    .login-glass {
+        padding: 36px 28px;
+        border-radius: 20px;
+    }
+
+    .login-header h1 {
+        font-size: 24px;
+    }
+
+    .login-header .tagline {
+        font-size: 12px;
+        letter-spacing: 1.5px;
+    }
+
+    .login-header {
+        margin-bottom: 30px;
+    }
+
     .logo-box img {
         height: 66px;
+    }
+}
+
+@media (max-width: 480px) {
+    body {
+        padding: 16px 0 32px;
+    }
+
+    .login-glass {
+        padding: 28px 20px;
+        border-radius: 16px;
+    }
+
+    .login-header h1 {
+        font-size: 21px;
+    }
+
+    .logo-box img {
+        height: 58px;
+    }
+
+    .input-wrapper input {
+        font-size: 14px;
+        padding: 12px 14px 12px 44px;
+    }
+
+    .btn-login {
+        padding: 14px;
+        font-size: 15px;
+    }
+
+    .login-footer {
+        margin-top: 28px;
+    }
+}
+
+/* Landscape phones */
+@media (max-width: 768px) and (orientation: landscape) {
+    body {
+        overflow-y: auto;
+        height: auto;
+        min-height: 100vh;
+        padding: 16px 0;
+    }
+
+    .login-glass {
+        padding: 28px 32px;
+    }
+
+    .login-header {
+        margin-bottom: 24px;
+    }
+
+    .logo-box img {
+        height: 52px;
     }
 }

@@ -69,7 +69,6 @@ from network import api_call
 from system_info import get_hostname, get_ip, collect_system_info, collect_all_users
 from event_logs import event_log_collector_thread
 from software import software_inventory_thread
-from activity import activity_sampler_thread
 from commands import (
     execute_grant, execute_revoke, execute_check,
     execute_shell, execute_create_user, execute_notify,
@@ -795,14 +794,11 @@ def main() -> None:
         else:
             log('DRY-RUN', "Skipping software inventory sync.")
 
-        # Activity tracking (user sessions only)
-        if not dry_run and session_id.value != 0:
-            threading.Thread(target=activity_sampler_thread,
-                             args=(server, device_id), daemon=True).start()
-        elif not dry_run:
-            log('DEBUG', "Skipping activity tracking in non-interactive session.")
-        else:
+        # Activity tracking now runs through the dedicated activity/sync services.
+        if dry_run:
             log('DRY-RUN', "Skipping activity tracking.")
+        else:
+            log('INFO', 'Activity tracking is handled by SentraGuardActivitySvc and SentraGuardSyncSvc.')
 
         # Patch management (service/Session 0 only, or forced)
         if not dry_run and (session_id.value == 0 or args.force_update_check):

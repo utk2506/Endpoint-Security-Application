@@ -1,11 +1,44 @@
-*.db
-database.db
-*.db-journal
-agent/*.log
-agent/event_state.json
+# ── Python ────────────────────────────────────────────────
 __pycache__/
 *.pyc
-test_render.js
+*.pyo
+*.pyd
+
+# ── PyInstaller ───────────────────────────────────────────
+build/
+dist/
+dist_sg/
+*.spec
+
+# ── Databases ─────────────────────────────────────────────
+*.db
+*.db-journal
+database.db
+
+# ── Logs & runtime state ──────────────────────────────────
 *.log
+agent_state.json
 event_state.json
 agent_debug.log
+
+# ── SSL certificates (sensitive) ─────────────────────────
+server.crt
+server.key
+*.pem
+
+# ── Installer outputs ────────────────────────────────────
+Output/
+Output_Safe/
+*.exe
+
+# ── Downloaded binaries ───────────────────────────────────
+agent/nssm.exe
+agent/nssm.zip
+agent/nssm_temp/
+agent/isetup.exe
+
+# ── IDE & tools ───────────────────────────────────────────
+.claude
+.vscode/
+.idea/
+test_render.js

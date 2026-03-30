@@ -27,10 +27,11 @@ import {
 } from './eventLogs.js';
 import {
     loadActivity, loadActivityUsers, loadDeviceSummary, loadHourlyHeatmap,
-    loadUserSummary, exportActivityCSV, activityPrevPage, activityNextPage,
+    loadUserSummary, exportActivityCSV, exportActivityXLSX, activityPrevPage, activityNextPage,
     renderStatusRing, renderAppUsageBarChart,
     applyActivityFilters, resetActivityFilters, loadActivityFilters,
-    loadActivityKpis, loadAnalyticsCharts, loadSessionTable, generateActivityReport
+    loadActivityKpis, loadAnalyticsCharts, loadSessionTable, generateActivityReport,
+    setActivityPeriod, applyActivityCustomRange
 } from './activity.js';
 import { sendNotification, loadNotifyCampaigns, cancelNotifyCampaign, toggleNotifySchedule } from './notifications.js';
 import { openSysInfoModal, closeSysInfoModal, renderSysInfo } from './sysInfo.js';
@@ -82,10 +83,11 @@ Object.assign(window, {
 
     // Activity
     loadActivity, loadActivityUsers, loadDeviceSummary, loadHourlyHeatmap,
-    loadUserSummary, exportActivityCSV, activityPrevPage, activityNextPage,
+    loadUserSummary, exportActivityCSV, exportActivityXLSX, activityPrevPage, activityNextPage,
     renderStatusRing, renderAppUsageBarChart,
     applyActivityFilters, resetActivityFilters, loadActivityFilters,
     loadActivityKpis, loadAnalyticsCharts, loadSessionTable, generateActivityReport,
+    setActivityPeriod, applyActivityCustomRange,
 
     // Notifications
     sendNotification, loadNotifyCampaigns, cancelNotifyCampaign, toggleNotifySchedule,
@@ -122,6 +124,9 @@ async function pollAll() {
         loadNotifyCampaigns(),
         _fetchAllCommandsForDashboard(),
         _fetchAllAdminsCount(),
+        // Always refresh KPI cards (Active/Idle/Locked/Offline) regardless of
+        // which tab is open so the status badges stay current in real-time.
+        loadActivityKpis(),
     ]);
 
     if (selectedDeviceId) await refreshAdminList();
@@ -134,7 +139,6 @@ async function pollAll() {
             loadDeviceSummary(),
             loadHourlyHeatmap(),
             loadUserSummary(),
-            loadActivityKpis(),
             loadAnalyticsCharts(),
         ]);
         loadSessionTable(true);
